@@ -34,6 +34,7 @@ from server import (
     resolve_media_file_path,
     run_openclaw_agent,
     run_gbrain,
+    search_raw_graph,
     serve_url_for_media_reference,
     gbrain_file_url_for_relative_path,
     materialize_gbrain_file_reference,
@@ -108,6 +109,67 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(rows[0]["score"], 0.7772)
         self.assertEqual(rows[0]["label"], "Equal Rights For All PAC (ERFA PAC)")
         self.assertEqual(rows[1]["slug"], "products/jtuner/rfc/part-03")
+
+    def test_search_raw_graph_promotes_matching_evidence_records(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "type": "root", "links": []}],
+            "edge_types": [],
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args == ("search", "exact TODO search fast terminal state"):
+                return "[0.75] categories/todo -- Todo hub\n[0.60] notes/memory-starmap-todo-list -- Todo list\n"
+            if args == ("list", "--type", "run", "-n", "120"):
+                return "runs/memory-stargraph-wish-sg0163-20260728t021507-0700-ab843b8b\trun\t2026-07-28\tMemory Stargraph Developer SG-0163 Run\n"
+            if args == ("list", "--type", "report", "-n", "120"):
+                return ""
+            if args == ("list", "--type", "learning", "-n", "120"):
+                return "learnings/memory-stargraph-20260728-exact-todo-search-fast-terminal-state\tlearning\t2026-07-28\tExact TODO-ID search needs a ready local index and terminal UI evidence\n"
+            if args == ("list", "--type", "todo", "-n", "120"):
+                return "notes/memory-starmap-todo-list/make-search-show-results-or-clear-terminal-state-for-exact-todo-ids\ttodo\t2026-07-28\tMake search show results or a clear terminal state for exact TODO IDs\n"
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "exact TODO search fast terminal state")
+
+        coverage = graph["source"]["coverage"]
+        self.assertEqual(
+            coverage["search_slugs"][0],
+            "learnings/memory-stargraph-20260728-exact-todo-search-fast-terminal-state",
+        )
+        self.assertIn(
+            "notes/memory-starmap-todo-list/make-search-show-results-or-clear-terminal-state-for-exact-todo-ids",
+            coverage["evidence_search_slugs"],
+        )
+        self.assertGreater(coverage["search_slugs"].index("categories/todo"), 0)
+        node_map = {node["slug"]: node for node in graph["nodes"]}
+        self.assertEqual(
+            node_map["learnings/memory-stargraph-20260728-exact-todo-search-fast-terminal-state"]["tags"],
+            ["lazy-search"],
+        )
+
+    def test_evidence_search_ignores_low_signal_page_list_matches(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "type": "root", "links": []}],
+            "edge_types": [],
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args == ("search", "Tony Guan"):
+                return "[0.90] people/tony-guan -- Tony Guan\n"
+            if args[0] == "list":
+                return "runs/memory-stargraph-daily-learning-intake-2026-07-28\trun\t2026-07-28\tMemory Stargraph Daily Learning Intake Run 2026-07-28\n"
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "Tony Guan")
+
+        self.assertEqual(graph["source"]["coverage"]["search_slugs"], ["people/tony-guan"])
+        self.assertEqual(graph["source"]["coverage"]["evidence_search_slugs"], [])
 
     def test_friendly_labels_strip_category_prefixes(self):
         self.assertEqual(make_label("companies/uber"), "Uber")

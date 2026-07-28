@@ -170,7 +170,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.166"
+UI_VERSION = "V1.0.167"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -2123,6 +2123,140 @@ def parse_search_results(output):
     return results
 
 
+EVIDENCE_SEARCH_TYPES = ("run", "report", "learning", "todo")
+EVIDENCE_SEARCH_PREFIXES = (
+    "runs/",
+    "reports/",
+    "learnings/",
+    "notes/memory-starmap-todo-list/",
+)
+EVIDENCE_SEARCH_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "for",
+    "from",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+
+def evidence_search_terms(query):
+    return [
+        term
+        for term in re.findall(r"[\w-]+", str(query or "").lower())
+        if len(term) >= 3 and term not in EVIDENCE_SEARCH_STOPWORDS
+    ]
+
+
+def evidence_haystack(row):
+    return " ".join(
+        str(row.get(key) or "")
+        for key in ("slug", "title", "type", "date")
+    ).lower().replace("_", "-")
+
+
+def score_evidence_record(row, query, terms):
+    slug = str(row.get("slug") or "")
+    if not slug.startswith(EVIDENCE_SEARCH_PREFIXES):
+        return 0
+    haystack = evidence_haystack(row)
+    normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower()).replace("_", "-")
+    if not terms:
+        return 0
+    score = 35
+    if str(row.get("type") or "") in EVIDENCE_SEARCH_TYPES:
+        score += 25
+    if normalized_query and normalized_query in haystack:
+        score += 80
+    matched_terms = sum(1 for term in terms if term in haystack)
+    score += matched_terms * 16
+    if matched_terms == len(terms):
+        score += 70
+    elif matched_terms < max(2, len(terms) // 2):
+        return 0
+    if slug.startswith(("runs/", "reports/", "learnings/")):
+        score += 30
+    if slug.startswith("notes/memory-starmap-todo-list/"):
+        score += 20
+    return score
+
+
+def evidence_record_search_results(query, existing_slugs=None, per_type_limit=120, result_limit=10):
+    existing_slugs = set(existing_slugs or [])
+    terms = evidence_search_terms(query)
+    if not terms:
+        return []
+    candidates = {}
+    for page_type in EVIDENCE_SEARCH_TYPES:
+        try:
+            rows = parse_page_list(run_gbrain("list", "--type", page_type, "-n", str(per_type_limit)))
+        except Exception:  # noqa: BLE001
+            continue
+        for row in rows:
+            slug = str(row.get("slug") or "")
+            score = score_evidence_record(row, query, terms)
+            if score <= 0:
+                continue
+            previous = candidates.get(slug)
+            if not previous or score > previous["evidence_score"]:
+                candidates[slug] = {
+                    "slug": slug,
+                    "score": 2.0 + score / 100.0,
+                    "label": str(row.get("title") or make_label(slug))[:120],
+                    "preview": "Evidence record: "
+                    + " ".join(part for part in [str(row.get("date") or ""), str(row.get("title") or "")] if part).strip(),
+                    "evidence_score": score,
+                }
+    return [
+        {key: value for key, value in item.items() if key != "evidence_score"}
+        for item in sorted(
+            candidates.values(),
+            key=lambda item: (
+                item["slug"] in existing_slugs,
+                item["evidence_score"],
+                item["score"],
+                item["slug"],
+            ),
+            reverse=True,
+        )[:result_limit]
+    ]
+
+
+def merge_search_results(primary_results, evidence_results):
+    merged = {}
+    for result in evidence_results + primary_results:
+        slug = result["slug"]
+        if slug not in merged:
+            merged[slug] = dict(result)
+            continue
+        current = merged[slug]
+        current["score"] = max(float(current.get("score") or 0), float(result.get("score") or 0))
+        if not current.get("preview"):
+            current["preview"] = result.get("preview") or ""
+        if not current.get("label"):
+            current["label"] = result.get("label") or make_label(slug)
+    evidence_order = {result["slug"]: index for index, result in enumerate(evidence_results)}
+    primary_order = {result["slug"]: index for index, result in enumerate(primary_results)}
+    return sorted(
+        merged.values(),
+        key=lambda item: (
+            1 if item["slug"] in evidence_order else 0,
+            -evidence_order.get(item["slug"], 9999),
+            float(item.get("score") or 0),
+            -primary_order.get(item["slug"], 9999),
+        ),
+        reverse=True,
+    )
+
+
 def extract_question_entities(question, limit=3):
     text = str(question or "")
     matches = re.findall(
@@ -3534,7 +3668,12 @@ def expand_raw_graph(raw_graph, center_slug):
 
 def search_raw_graph(raw_graph, query):
     search_output = run_gbrain("search", query)
-    results = parse_search_results(search_output)
+    primary_results = parse_search_results(search_output)
+    evidence_results = evidence_record_search_results(
+        query,
+        existing_slugs=[result["slug"] for result in primary_results],
+    )
+    results = merge_search_results(primary_results, evidence_results)
     nodes = {str(node.get("slug")): dict(node) for node in raw_graph.get("nodes", []) if node.get("slug")}
     for result in results:
         slug = result["slug"]
@@ -3557,6 +3696,7 @@ def search_raw_graph(raw_graph, query):
     coverage["search_results"] = len(results)
     coverage["last_search_query"] = query
     coverage["search_slugs"] = [result["slug"] for result in results]
+    coverage["evidence_search_slugs"] = [result["slug"] for result in evidence_results]
     source.update(
         {
             "mode": "gbrain",
