@@ -46,6 +46,10 @@ Open:
 http://127.0.0.1:8788
 ```
 
+For a first run, open **Settings -> First-run activation**. It walks from the
+privacy-safe sample brain into live GBrain readiness without saving private
+node content, prompts, credentials, or hostnames.
+
 ## Main Features
 
 These are the highest-value capabilities for turning a `gbrain` knowledge base into an operational shared memory system.

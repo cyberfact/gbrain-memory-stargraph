@@ -170,7 +170,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.165"
+UI_VERSION = "V1.0.166"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -5041,6 +5041,83 @@ def privacy_safe_sample_brain():
     }
 
 
+def first_run_activation_funnel():
+    diagnostics = setup_diagnostics()
+    sample = privacy_safe_sample_brain()
+    live_ready = bool(diagnostics.get("ok") and diagnostics.get("source_mode") == "gbrain")
+    sample_ready = bool(sample.get("ok") and sample.get("privacy_safe"))
+    steps = [
+        {
+            "id": "sample_brain_opened",
+            "label": "Open sample brain",
+            "status": "ready" if sample_ready else "blocked",
+            "next_action": "Open Sample brain demo from Settings.",
+            "evidence": "privacy_safe_sample_brain" if sample_ready else "sample_brain_unavailable",
+        },
+        {
+            "id": "sample_node_selected",
+            "label": "Select sample node",
+            "status": "ready" if sample_ready else "blocked",
+            "next_action": f"Select {sample.get('sample_slug') or 'sample-memory-hub'} in the demo graph.",
+            "evidence": sample.get("sample_slug") or "sample-memory-hub",
+        },
+        {
+            "id": "relationship_provenance_viewed",
+            "label": "Inspect relationships and provenance",
+            "status": "ready" if sample_ready else "blocked",
+            "next_action": "Use View or the relationship list on the sample node.",
+            "evidence": "synthetic_walkthrough",
+        },
+        {
+            "id": "sample_yoda_attempted",
+            "label": "Ask a synthetic Yoda question",
+            "status": "available" if sample_ready else "blocked",
+            "next_action": "Ask Yoda about the sample learning loop from the sample node.",
+            "evidence": "client_session_boolean_only",
+        },
+        {
+            "id": "setup_diagnostics_reviewed",
+            "label": "Review setup diagnostics",
+            "status": "available",
+            "next_action": "Open Checklist & diagnostics from Settings.",
+            "evidence": "setup_diagnostics_redacted",
+        },
+        {
+            "id": "live_gbrain_readiness_checked",
+            "label": "Check live GBrain readiness",
+            "status": "complete" if live_ready else "needs_attention",
+            "next_action": diagnostics.get("next_action") or "Resolve setup diagnostics before switching to live private GBrain.",
+            "evidence": "setup_diagnostics_ok" if live_ready else "setup_diagnostics_attention",
+        },
+    ]
+    completed = sum(1 for step in steps if step["status"] == "complete")
+    return {
+        "ok": True,
+        "read_only": True,
+        "privacy_safe": True,
+        "ui_version": UI_VERSION,
+        "mode": "live-ready" if live_ready else "sample-first",
+        "sample_state": {
+            "available": sample_ready,
+            "sample_slug": sample.get("sample_slug") or "sample-memory-hub",
+            "privacy_safe": bool(sample.get("privacy_safe")),
+        },
+        "live_state": {
+            "ready": live_ready,
+            "source_mode": diagnostics.get("source_mode"),
+            "source_status": diagnostics.get("source_status"),
+            "failing_checks": diagnostics.get("failing_checks") or [],
+        },
+        "progress": {
+            "completed": completed,
+            "total": len(steps),
+            "next_step_id": next((step["id"] for step in steps if step["status"] != "complete"), ""),
+        },
+        "steps": steps,
+        "privacy": "Only step ids, statuses, and redacted diagnostics are returned. Browser progress uses local boolean flags and stores no private node text, questions, hostnames, credentials, or content.",
+    }
+
+
 def safe_gbrain_get_text(slug):
     try:
         return run_gbrain("get", slug, timeout=20)
@@ -5211,6 +5288,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.end_json(setup_diagnostics())
         if parsed.path == "/api/sample-brain":
             return self.end_json(privacy_safe_sample_brain())
+        if parsed.path == "/api/activation-funnel":
+            return self.end_json(first_run_activation_funnel())
         if parsed.path == "/api/memory-value-digest":
             query = parse_qs(parsed.query)
             return self.end_json(memory_value_digest((query.get("window") or ["day"])[0]))

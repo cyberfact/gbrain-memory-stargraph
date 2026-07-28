@@ -682,6 +682,41 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("tony", json.dumps(data).lower())
         self.assertIn("sample-memory-hub", {node["slug"] for node in data["graph"]["nodes"]})
 
+    def test_activation_funnel_is_privacy_safe_and_reports_live_readiness(self):
+        fake_store = FakeStore()
+        fake_store.graph = {
+            "source": {"mode": "gbrain", "status": "live", "warnings": []},
+            "nodes": [{"slug": "index", "degree": 3}],
+        }
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.GBRAIN") as gbrain_path,
+            mock.patch("server.GBRAIN_FILE_STORE_ROOTS", [Path(tempfile.gettempdir())]),
+            mock.patch("server.GBRAIN_FILE_BASE_URLS", []),
+        ):
+            gbrain_path.exists.return_value = True
+            status, data = self.dispatch_get("/api/activation-funnel")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["read_only"])
+        self.assertTrue(data["privacy_safe"])
+        self.assertEqual(data["mode"], "live-ready")
+        step_ids = {step["id"] for step in data["steps"]}
+        self.assertTrue(
+            {
+                "sample_brain_opened",
+                "sample_node_selected",
+                "relationship_provenance_viewed",
+                "sample_yoda_attempted",
+                "setup_diagnostics_reviewed",
+                "live_gbrain_readiness_checked",
+            }.issubset(step_ids)
+        )
+        self.assertTrue(data["live_state"]["ready"])
+        self.assertNotIn("api_key", json.dumps(data).lower())
+        self.assertNotIn("prompt", json.dumps(data).lower())
+
     def test_memory_value_digest_is_read_only_and_links_evidence(self):
         fake_store = FakeStore()
         with (

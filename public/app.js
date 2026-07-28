@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.165";
+const UI_VERSION = "V1.0.166";
 const SEARCH_TIMEOUT_MS = 30000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -11,6 +11,7 @@ const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const FLOWING_EDGE_EFFECT_KEY = "memory-stargraph.flowing-edge-effect";
 const YODA_CONTEXT_DEPTH_KEY = "memory-stargraph.yoda-context-depth";
 const PLANNED_PLAYBACK_KEY = "memory-stargraph.planned-playback.v1";
+const ACTIVATION_PROGRESS_KEY = "memory-stargraph.activation-progress.v1";
 const PLACEHOLDER_SUMMARY_TEXTS = new Set([
   "summary",
   "metadata",
@@ -223,6 +224,7 @@ const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
 const settingsYodaModelButton = document.getElementById("settingsYodaModelButton");
 const settingsYodaPromptButton = document.getElementById("settingsYodaPromptButton");
 const settingsGbrainBackendButton = document.getElementById("settingsGbrainBackendButton");
+const activationFunnelButton = document.getElementById("activationFunnelButton");
 const settingsDiagnosticsButton = document.getElementById("settingsDiagnosticsButton");
 const sampleBrainButton = document.getElementById("sampleBrainButton");
 const memoryDigestButton = document.getElementById("memoryDigestButton");
@@ -315,6 +317,20 @@ function readJsonSetting(key, fallback) {
   if (!value) return fallback;
   const parsed = safeJsonParse(value, fallback);
   return Array.isArray(parsed) ? parsed : fallback;
+}
+
+function readObjectSetting(key, fallback = {}) {
+  const value = window.localStorage?.getItem(key);
+  if (!value) return { ...fallback };
+  const parsed = safeJsonParse(value, fallback);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : { ...fallback };
+}
+
+function markActivationProgress(stepId) {
+  if (!stepId) return;
+  const progress = readObjectSetting(ACTIVATION_PROGRESS_KEY, {});
+  progress[stepId] = true;
+  window.localStorage?.setItem(ACTIVATION_PROGRESS_KEY, JSON.stringify(progress));
 }
 
 function readBooleanSetting(key, fallback = false) {
@@ -3830,6 +3846,7 @@ function openYodaLogWindow(options = {}) {
 
 async function openSetupDiagnosticsWindow() {
   hideFloatingPanels();
+  markActivationProgress("setup_diagnostics_reviewed");
   modalKicker.textContent = "First-run setup";
   modalTitle.textContent = "Checklist & diagnostics";
   modalMessage.textContent = "Safe to copy: configuration values and node content are redacted.";
@@ -3852,8 +3869,87 @@ async function openSetupDiagnosticsWindow() {
   modalMarkdown.appendChild(pre);
 }
 
+function activationStepStatus(step, progress) {
+  if (progress[step.id]) return "complete";
+  return step.status || "available";
+}
+
+function renderActivationFunnel(data) {
+  const progress = readObjectSetting(ACTIVATION_PROGRESS_KEY, {});
+  const steps = Array.isArray(data.steps) ? data.steps : [];
+  const completed = steps.filter((step) => activationStepStatus(step, progress) === "complete").length;
+  const total = steps.length || 1;
+  const nextStep = steps.find((step) => activationStepStatus(step, progress) !== "complete");
+  const wrap = document.createElement("div");
+  wrap.className = "activation-funnel-view";
+
+  const summary = document.createElement("p");
+  summary.textContent = `${completed}/${total} complete - ${data.mode === "live-ready" ? "live GBrain ready" : "sample-first path"}.`;
+  wrap.appendChild(summary);
+
+  const list = document.createElement("ol");
+  steps.forEach((step) => {
+    const item = document.createElement("li");
+    const status = activationStepStatus(step, progress);
+    const title = document.createElement("strong");
+    title.textContent = `${status}: ${step.label || step.id}`;
+    const action = document.createElement("span");
+    action.textContent = ` ${step.next_action || ""}`;
+    item.appendChild(title);
+    item.appendChild(action);
+    list.appendChild(item);
+  });
+  wrap.appendChild(list);
+
+  const next = document.createElement("p");
+  next.textContent = nextStep
+    ? `Next: ${nextStep.next_action || nextStep.label || nextStep.id}`
+    : "Next: switch to live private GBrain when you are ready.";
+  wrap.appendChild(next);
+
+  const privacy = document.createElement("p");
+  privacy.textContent = data.privacy || "Activation progress is privacy-safe and read-only.";
+  wrap.appendChild(privacy);
+  return wrap;
+}
+
+async function openActivationFunnelWindow() {
+  hideFloatingPanels();
+  modalKicker.textContent = "First-run setup";
+  modalTitle.textContent = "First-run activation";
+  modalMessage.textContent = "Sample-to-live progress with privacy-safe local completion flags.";
+  modalPrimaryButton.textContent = "Close";
+  modalCloseButton.setAttribute("aria-label", "Close first-run activation");
+  modalPrimaryButton.hidden = false;
+  modalCancelButton.hidden = true;
+  modalEditor.hidden = true;
+  modalChat.hidden = true;
+  modalForm.hidden = true;
+  modalMarkdown.hidden = false;
+  modalMarkdown.innerHTML = "";
+  const loading = document.createElement("p");
+  loading.className = "modal-loading-state";
+  loading.textContent = "Loading first-run activation...";
+  modalMarkdown.appendChild(loading);
+  operationModal.hidden = false;
+  state.modalAction = { action: "activation-funnel", slug: "sample-memory-hub", label: "First-run activation" };
+  const response = await apiGet("/api/activation-funnel");
+  modalMarkdown.innerHTML = "";
+  if (response.ok) {
+    modalMarkdown.appendChild(renderActivationFunnel(response.data || {}));
+  } else {
+    const pre = document.createElement("pre");
+    pre.className = "yoda-log-window";
+    pre.textContent = `Activation unavailable: ${response.data?.error || response.status}`;
+    modalMarkdown.appendChild(pre);
+  }
+}
+
 async function openSampleBrainWindow() {
   hideFloatingPanels();
+  markActivationProgress("sample_brain_opened");
+  markActivationProgress("sample_node_selected");
+  markActivationProgress("relationship_provenance_viewed");
   modalKicker.textContent = "Sample brain";
   modalTitle.textContent = "Privacy-safe first-value demo";
   modalMessage.textContent = "Demo mode uses bundled synthetic data only. It does not include private GBrain content.";
@@ -6076,6 +6172,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 
   if (action === "ask-yoda") {
+    if (slug === "sample-memory-hub" || slug.startsWith("sample-")) markActivationProgress("sample_yoda_attempted");
     modalKicker.textContent = "Ask Yoda";
     modalPrimaryButton.textContent = "Send";
     modalMessage.textContent = "Chat with an agent using this node as context.";
@@ -6378,7 +6475,7 @@ async function runModalPrimaryAction() {
     return;
   }
   const { action, slug, label } = state.modalAction;
-  if (action === "view" || action === "media" || action === "result" || action === "take-review" || action === "setup-diagnostics" || action === "sample-brain" || action === "memory-digest") {
+  if (action === "view" || action === "media" || action === "result" || action === "take-review" || action === "setup-diagnostics" || action === "activation-funnel" || action === "sample-brain" || action === "memory-digest") {
     closeModal();
     return;
   }
@@ -7065,6 +7162,9 @@ function bindEvents() {
   });
   settingsYodaPromptButton?.addEventListener("click", () => {
     void openYodaPromptWindow();
+  });
+  activationFunnelButton?.addEventListener("click", () => {
+    void openActivationFunnelWindow();
   });
   settingsDiagnosticsButton?.addEventListener("click", () => {
     void openSetupDiagnosticsWindow();
