@@ -1,5 +1,5 @@
-const UI_VERSION = "V1.0.164";
-const SEARCH_TIMEOUT_MS = 12000;
+const UI_VERSION = "V1.0.165";
+const SEARCH_TIMEOUT_MS = 30000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -1371,10 +1371,20 @@ function todoSlugFromBacklogMarkdown(markdown, todoId) {
   return match?.[1] || "";
 }
 
-function prefetchTodoBacklogForSearch() {
-  if (state.lazySearch.todoBacklogMarkdown) return Promise.resolve(state.lazySearch.todoBacklogMarkdown);
+function todoBacklogSearchUrl(force = false) {
+  const baseUrl = `/api/entity-raw/${encodeURIComponent("notes/memory-starmap-todo-list")}`;
+  return force ? `${baseUrl}?purpose=search&ts=${Date.now()}` : baseUrl;
+}
+
+function prefetchTodoBacklogForSearch(options = {}) {
+  const force = Boolean(options.force);
+  if (!force && state.lazySearch.todoBacklogMarkdown) return Promise.resolve(state.lazySearch.todoBacklogMarkdown);
+  if (force) {
+    state.lazySearch.todoBacklogMarkdown = "";
+    state.lazySearch.todoBacklogPromise = null;
+  }
   if (!state.lazySearch.todoBacklogPromise) {
-    state.lazySearch.todoBacklogPromise = apiGet(`/api/entity-raw/${encodeURIComponent("notes/memory-starmap-todo-list")}`)
+    state.lazySearch.todoBacklogPromise = apiGet(todoBacklogSearchUrl(force))
       .then((response) => {
         const content = response.ok ? response.data?.content || "" : "";
         if (content) state.lazySearch.todoBacklogMarkdown = content;
@@ -1391,6 +1401,10 @@ async function todoBacklogMarkdownForSearch(todoId) {
     window.setTimeout(() => resolve(""), 1200);
   });
   return await Promise.race([prefetchTodoBacklogForSearch(), timeout]);
+}
+
+async function freshTodoBacklogMarkdownForSearch() {
+  return await prefetchTodoBacklogForSearch({ force: true });
 }
 
 function looksLikeExactSlug(value) {
@@ -1447,7 +1461,10 @@ async function tryExactSlugSearch(slug, options = {}) {
 
 async function tryExactTodoIdSearch(todoId) {
   if (!looksLikeTodoId(todoId)) return false;
-  const slug = todoSlugFromBacklogMarkdown(await todoBacklogMarkdownForSearch(todoId), todoId);
+  let slug = todoSlugFromBacklogMarkdown(await todoBacklogMarkdownForSearch(todoId), todoId);
+  if (!slug) {
+    slug = todoSlugFromBacklogMarkdown(await freshTodoBacklogMarkdownForSearch(), todoId);
+  }
   if (!slug) {
     reportSearchTerminalState(todoId);
     return "terminal";
