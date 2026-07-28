@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.159";
+const UI_VERSION = "V1.0.160";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -1386,20 +1386,40 @@ function reportSearchTiming(searchStartedAt) {
   hoverLabel.textContent = `Search completed in ${elapsed}ms`;
 }
 
+function showSearchSelectionFromGraph(slug) {
+  const node = state.nodeMap.get(slug);
+  state.focusSlug = slug;
+  updateAskYodaButtons();
+  detailTitle.textContent = node?.label || slug;
+  if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
+  setTimelineBadge(slug, false);
+  detailType.textContent = node
+    ? `${node.category || node.type || "entity"} · graph result`
+    : "graph result";
+  detailSummary.textContent = node?.summary
+    ? displaySummary(node.summary)
+    : `Search found ${slug}. Select the node to load saved details and direct links.`;
+  renderSelectionMediaPreview([], slug);
+  detailLinks.innerHTML = "";
+  const directLinks = document.createElement("span");
+  directLinks.textContent = "Select the node to load direct links.";
+  detailLinks.appendChild(directLinks);
+  detailSecondRing.innerHTML = "";
+  const secondRing = document.createElement("span");
+  secondRing.textContent = "Select the node to load second-ring entities.";
+  detailSecondRing.appendChild(secondRing);
+  setHover(slug);
+  replaceLocationSlug(slug);
+}
+
 async function tryExactSlugSearch(slug, options = {}) {
   if (!looksLikeExactSlug(slug)) return false;
   const response = await apiPost(`/api/entity-expand/${encodeURIComponent(slug)}`);
   if (!response.ok || !response.data?.graph) return false;
   applyGraphPayload(response.data.graph, slug);
   requestRender();
-  const details = loadEntity(slug, { source: "search" });
-  if (options.awaitDetails !== false) {
-    await details;
-  } else {
-    details.catch((error) => {
-      hoverLabel.textContent = `Loaded ${slug}; detail hydration failed: ${error.message || error}`;
-    });
-  }
+  if (options.awaitDetails === false) showSearchSelectionFromGraph(slug);
+  else await loadEntity(slug, { source: "search" });
   return true;
 }
 
