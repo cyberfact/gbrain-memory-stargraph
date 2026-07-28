@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.158";
+const UI_VERSION = "V1.0.159";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -1176,7 +1176,7 @@ async function runLazySearch(query) {
       if (exactTodoIdHandled === "loaded") reportSearchTiming(searchStartedAt);
       return;
     }
-    const exactSlugLoaded = await tryExactSlugSearch(submittedQuery);
+    const exactSlugLoaded = await tryExactSlugSearch(submittedQuery, { awaitDetails: false });
     if (exactSlugLoaded) {
       reportSearchTiming(searchStartedAt);
       return;
@@ -1386,13 +1386,20 @@ function reportSearchTiming(searchStartedAt) {
   hoverLabel.textContent = `Search completed in ${elapsed}ms`;
 }
 
-async function tryExactSlugSearch(slug) {
+async function tryExactSlugSearch(slug, options = {}) {
   if (!looksLikeExactSlug(slug)) return false;
   const response = await apiPost(`/api/entity-expand/${encodeURIComponent(slug)}`);
   if (!response.ok || !response.data?.graph) return false;
   applyGraphPayload(response.data.graph, slug);
   requestRender();
-  await loadEntity(slug, { source: "search" });
+  const details = loadEntity(slug, { source: "search" });
+  if (options.awaitDetails !== false) {
+    await details;
+  } else {
+    details.catch((error) => {
+      hoverLabel.textContent = `Loaded ${slug}; detail hydration failed: ${error.message || error}`;
+    });
+  }
   return true;
 }
 
@@ -1408,7 +1415,7 @@ async function tryExactTodoIdSearch(todoId) {
     reportSearchTerminalState(todoId);
     return "terminal";
   }
-  const loaded = await tryExactSlugSearch(slug);
+  const loaded = await tryExactSlugSearch(slug, { awaitDetails: false });
   if (!loaded) {
     reportSearchTerminalState(todoId);
     return "terminal";
