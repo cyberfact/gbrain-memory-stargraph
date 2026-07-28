@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.160";
+const UI_VERSION = "V1.0.161";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -71,7 +71,7 @@ const state = {
     delaySeconds: 5,
   },
   selectionHistory: { slugs: [], index: -1, navigating: false },
-  lazySearch: { timer: null, query: "", loading: false },
+  lazySearch: { timer: null, query: "", loading: false, todoBacklogMarkdown: "", todoBacklogPromise: null },
   menuSlug: null,
   modalAction: null,
   askYodaChats: new Map(),
@@ -1371,6 +1371,28 @@ function todoSlugFromBacklogMarkdown(markdown, todoId) {
   return match?.[1] || "";
 }
 
+function prefetchTodoBacklogForSearch() {
+  if (state.lazySearch.todoBacklogMarkdown) return Promise.resolve(state.lazySearch.todoBacklogMarkdown);
+  if (!state.lazySearch.todoBacklogPromise) {
+    state.lazySearch.todoBacklogPromise = apiGet(`/api/entity-raw/${encodeURIComponent("notes/memory-starmap-todo-list")}`)
+      .then((response) => {
+        const content = response.ok ? response.data?.content || "" : "";
+        if (content) state.lazySearch.todoBacklogMarkdown = content;
+        return content;
+      })
+      .catch(() => "");
+  }
+  return state.lazySearch.todoBacklogPromise;
+}
+
+async function todoBacklogMarkdownForSearch(todoId) {
+  if (state.lazySearch.todoBacklogMarkdown) return state.lazySearch.todoBacklogMarkdown;
+  const timeout = new Promise((resolve) => {
+    window.setTimeout(() => resolve(""), 1200);
+  });
+  return await Promise.race([prefetchTodoBacklogForSearch(), timeout]);
+}
+
 function looksLikeExactSlug(value) {
   const text = String(value || "").trim();
   const slugSegmentPattern = "[A-Za-z0-9][A-Za-z0-9" + "._-]*";
@@ -1425,12 +1447,7 @@ async function tryExactSlugSearch(slug, options = {}) {
 
 async function tryExactTodoIdSearch(todoId) {
   if (!looksLikeTodoId(todoId)) return false;
-  const response = await withSearchTimeout(
-    apiGet(`/api/entity-raw/${encodeURIComponent("notes/memory-starmap-todo-list")}`),
-    todoId,
-    1200,
-  );
-  const slug = todoSlugFromBacklogMarkdown(response.data?.content || "", todoId);
+  const slug = todoSlugFromBacklogMarkdown(await todoBacklogMarkdownForSearch(todoId), todoId);
   if (!slug) {
     reportSearchTerminalState(todoId);
     return "terminal";
@@ -7628,6 +7645,7 @@ async function fetchHidden() {
 async function init() {
   bindHudTooltipEvents();
   bindEvents();
+  void prefetchTodoBacklogForSearch();
   updateResponsiveSelectionPlacement();
   uiVersion.textContent = UI_VERSION;
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
