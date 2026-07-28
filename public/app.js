@@ -1,4 +1,5 @@
-const UI_VERSION = "V1.0.163";
+const UI_VERSION = "V1.0.164";
+const SEARCH_TIMEOUT_MS = 12000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -486,7 +487,7 @@ function apiGet(url) {
   });
 }
 
-function withSearchTimeout(promise, query, timeoutMs = 1800) {
+function withSearchTimeout(promise, query, timeoutMs = SEARCH_TIMEOUT_MS) {
   return Promise.race([
     promise,
     new Promise((_, reject) => {
@@ -1180,7 +1181,7 @@ async function runLazySearch(query) {
       reportSearchTiming(searchStartedAt);
       return;
     }
-    const response = await withSearchTimeout(apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`), submittedQuery);
+    const response = await withSearchTimeout(apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`), submittedQuery, SEARCH_TIMEOUT_MS);
     if (!response.ok) {
       reportSearchTerminalState(submittedQuery);
       return;
