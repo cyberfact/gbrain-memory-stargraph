@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.162";
+const UI_VERSION = "V1.0.163";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -7644,7 +7644,6 @@ async function fetchHidden() {
 async function init() {
   bindHudTooltipEvents();
   bindEvents();
-  void prefetchTodoBacklogForSearch();
   updateResponsiveSelectionPlacement();
   uiVersion.textContent = UI_VERSION;
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
@@ -7657,6 +7656,7 @@ async function init() {
   updateNavModeState();
   updateCacheSettingsView();
   setZoom(state.zoom);
+  await prefetchTodoBacklogForSearch();
   await fetchHidden();
   await loadPersistentYodaLogs();
   const requestedSlug = requestedSlugFromLocation();
