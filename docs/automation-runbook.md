@@ -162,6 +162,14 @@ interruption, or crash evidence remains visible. A stale UX lease or stale
 Developer marker requires Product Owner resolution and is never bypassed
 automatically.
 
+When resolving stale active metadata, Product Owner must clear both raw
+markdown/frontmatter and GBrain page tags. A terminal Run can still block
+quiescence if the tag API or page metadata contains `active` after the raw body
+has been rewritten. Use the Stargraph tag endpoint, for example
+`/api/entity-tags/<slug>`, or `gbrain untag <slug> active`, then verify raw
+readback has no standalone `active` tag, no active title/body marker, and
+semantic fields such as `ux_lease` and `active_change` are false.
+
 ## SRE reliability and resilience
 
 `memory-stargraph-sre-daily-reliability` runs daily at 3:00 AM and
