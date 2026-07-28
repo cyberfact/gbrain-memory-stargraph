@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.161";
+const UI_VERSION = "V1.0.162";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -1173,7 +1173,6 @@ async function runLazySearch(query) {
     prepareSearchSelectionHistory(state.focusSlug);
     const exactTodoIdHandled = await tryExactTodoIdSearch(submittedQuery);
     if (exactTodoIdHandled) {
-      if (exactTodoIdHandled === "loaded") reportSearchTiming(searchStartedAt);
       return;
     }
     const exactSlugLoaded = await tryExactSlugSearch(submittedQuery, { awaitDetails: false });
