@@ -57,6 +57,8 @@ DEFAULT_CONFIG = {
     "yoda_timeout_seconds": 45,
     "yoda_graph_query_timeout_seconds": 30,
     "yoda_broad_graph_budget_seconds": 8,
+    "yoda_node_path": "",
+    "yoda_node_fallback_paths": [],
 }
 
 
@@ -170,7 +172,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.167"
+UI_VERSION = "V1.0.168"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -805,6 +807,11 @@ def sanitize_diagnostics(diagnostics):
         "error_summary",
         "stdout_preview",
         "stderr_preview",
+        "node_runtime_status",
+        "node_runtime_path",
+        "node_runtime_version",
+        "node_runtime_source",
+        "node_runtime_error",
         "timings",
         "context_cache_hit",
         "context_subphases_ms",
@@ -1708,6 +1715,16 @@ def yoda_runtime_config():
         ))
     except (TypeError, ValueError):
         broad_graph_budget = min(graph_query_timeout, 8)
+    node_path = str(os.environ.get("MEMORY_STARGRAPH_YODA_NODE_PATH") or config.get("yoda_node_path") or "").strip()
+    fallback_paths = []
+    env_fallbacks = os.environ.get("MEMORY_STARGRAPH_YODA_NODE_FALLBACK_PATHS")
+    if env_fallbacks:
+        fallback_paths.extend(path for path in env_fallbacks.split(os.pathsep) if path.strip())
+    configured_fallbacks = config.get("yoda_node_fallback_paths") or []
+    if isinstance(configured_fallbacks, str):
+        configured_fallbacks = [configured_fallbacks]
+    if isinstance(configured_fallbacks, list):
+        fallback_paths.extend(str(path) for path in configured_fallbacks if str(path).strip())
     return {
         "backend": backend,
         "model": model,
@@ -1717,6 +1734,8 @@ def yoda_runtime_config():
         "timeout": timeout,
         "graph_query_timeout": graph_query_timeout,
         "broad_graph_budget": broad_graph_budget,
+        "node_path": node_path,
+        "node_fallback_paths": fallback_paths,
     }
 
 
@@ -1732,6 +1751,7 @@ def public_yoda_model_config():
         "graph_query_timeout_seconds": config["graph_query_timeout"],
         "api_key_available": bool(os.environ.get(config["api_key_env"])) if config["api_key_env"] else False,
         "backends": sorted(YODA_BACKENDS),
+        "node_runtime": select_openclaw_node_runtime(config) if config["backend"] == "openclaw" else {"status": "not_used"},
     }
 
 
@@ -1743,6 +1763,7 @@ def save_yoda_model_config(payload):
     base_url = str(payload.get("base_url") or "").strip()
     api_key_env = str(payload.get("api_key_env") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
     agent = str(payload.get("agent") or "").strip()
+    node_path = str(payload.get("node_path") or "").strip()
     try:
         timeout_seconds = max(5, min(300, int(payload.get("timeout_seconds") or 45)))
     except (TypeError, ValueError):
@@ -1765,6 +1786,7 @@ def save_yoda_model_config(payload):
         "yoda_agent": agent,
         "yoda_timeout_seconds": timeout_seconds,
         "yoda_graph_query_timeout_seconds": graph_query_timeout_seconds,
+        "yoda_node_path": node_path,
     })
     write_local_config_file(config)
     return public_yoda_model_config()
@@ -1945,6 +1967,133 @@ def run_yoda_model(prompt, return_details=False):
     return {"output": None, **details} if return_details else None
 
 
+def bundled_codex_node_path():
+    return Path.home() / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "bin" / "node"
+
+
+def parse_node_version(raw_version):
+    match = re.search(r"v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)", str(raw_version or ""))
+    if not match:
+        return None
+    return tuple(int(match.group(part)) for part in ("major", "minor", "patch"))
+
+
+def openclaw_supports_node_version(raw_version):
+    version = parse_node_version(raw_version)
+    if version is None:
+        return False
+    major, minor, patch = version
+    if major == 22:
+        return (minor, patch) >= (22, 3)
+    if major == 24:
+        return (minor, patch) >= (15, 0)
+    if major == 25:
+        return (minor, patch) >= (9, 0)
+    return major > 25
+
+
+def normalize_node_candidate(path):
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    if raw == "node":
+        return shutil.which("node") or raw
+    return str(Path(raw).expanduser())
+
+
+def node_runtime_candidates(config):
+    candidates = []
+    explicit = normalize_node_candidate(config.get("node_path"))
+    if explicit:
+        candidates.append(("configured", explicit))
+    for path in config.get("node_fallback_paths") or []:
+        normalized = normalize_node_candidate(path)
+        if normalized:
+            candidates.append(("configured_fallback", normalized))
+    candidates.extend(
+        [
+            ("codex_bundled", str(bundled_codex_node_path())),
+            ("path", shutil.which("node") or "node"),
+            ("homebrew_intel", "/usr/local/bin/node"),
+            ("homebrew_apple_silicon", "/opt/homebrew/bin/node"),
+        ]
+    )
+    seen = set()
+    ordered = []
+    for source, path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        ordered.append((source, path))
+    return ordered
+
+
+def probe_node_runtime(path, source):
+    normalized = normalize_node_candidate(path)
+    details = {
+        "path": normalized,
+        "source": source,
+        "status": "missing",
+        "version": "",
+        "error": "",
+    }
+    if not normalized:
+        return details
+    binary = Path(normalized)
+    if not binary.exists():
+        details["error"] = "node binary not found"
+        return details
+    try:
+        result = subprocess.run(
+            [str(binary), "-e", "process.stdout.write(process.version)"],
+            cwd=ROOT,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        details.update({"status": "failed", "error": safe_preview(str(exc), 240)})
+        return details
+    details["version"] = safe_preview(result.stdout, 80)
+    if result.returncode != 0:
+        details.update({
+            "status": "failed",
+            "error": safe_preview(result.stderr or result.stdout, 300),
+        })
+        return details
+    if not openclaw_supports_node_version(details["version"]):
+        details.update({
+            "status": "unsupported_version",
+            "error": f"OpenClaw requires Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0; found {details['version'] or 'unknown'}",
+        })
+        return details
+    details["status"] = "ok"
+    return details
+
+
+def select_openclaw_node_runtime(config):
+    probes = [probe_node_runtime(path, source) for source, path in node_runtime_candidates(config)]
+    selected = next((probe for probe in probes if probe["status"] == "ok"), None)
+    if selected:
+        return {
+            "status": "ok",
+            "path": selected["path"],
+            "version": selected["version"],
+            "source": selected["source"],
+            "error": "",
+            "candidates": probes,
+        }
+    first_failure = next((probe for probe in probes if probe["status"] != "missing"), probes[0] if probes else {})
+    return {
+        "status": "unavailable",
+        "path": "",
+        "version": "",
+        "source": "",
+        "error": first_failure.get("error") or "No supported Node runtime found for OpenClaw",
+        "candidates": probes,
+    }
+
+
 def run_openclaw_agent(prompt, timeout=45, return_details=False, config=None):
     config = config or yoda_runtime_config()
     timeout = int(config.get("timeout") or timeout or 45)
@@ -1967,8 +2116,24 @@ def run_openclaw_agent(prompt, timeout=45, return_details=False, config=None):
         command.extend(["--model", str(config.get("model")).strip()])
     env = os.environ.copy()
     bun_bin = Path.home() / ".bun" / "bin"
-    env["PATH"] = f"{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
     details = yoda_details("openclaw", str(config.get("model") or ""), timeout)
+    node_runtime = select_openclaw_node_runtime(config)
+    details.update({
+        "node_runtime_status": node_runtime["status"],
+        "node_runtime_path": node_runtime.get("path", ""),
+        "node_runtime_version": node_runtime.get("version", ""),
+        "node_runtime_source": node_runtime.get("source", ""),
+        "node_runtime_error": node_runtime.get("error", ""),
+    })
+    if node_runtime["status"] != "ok":
+        details.update({
+            "openclaw_status": "runtime_unavailable",
+            "model_status": "unavailable",
+            "error_summary": node_runtime.get("error") or "No supported Node runtime found for OpenClaw",
+        })
+        return {"output": None, **details} if return_details else None
+    node_dir = str(Path(node_runtime["path"]).parent)
+    env["PATH"] = f"{node_dir}:{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
     try:
         result = subprocess.run(
             command,
@@ -4896,6 +5061,11 @@ class GraphStore:
             "error_summary": agent_result.get("error_summary", "") if isinstance(agent_result, dict) else "",
             "stdout_preview": agent_result.get("stdout_preview", "") if isinstance(agent_result, dict) else "",
             "stderr_preview": agent_result.get("stderr_preview", "") if isinstance(agent_result, dict) else "",
+            "node_runtime_status": agent_result.get("node_runtime_status", "") if isinstance(agent_result, dict) else "",
+            "node_runtime_path": agent_result.get("node_runtime_path", "") if isinstance(agent_result, dict) else "",
+            "node_runtime_version": agent_result.get("node_runtime_version", "") if isinstance(agent_result, dict) else "",
+            "node_runtime_source": agent_result.get("node_runtime_source", "") if isinstance(agent_result, dict) else "",
+            "node_runtime_error": agent_result.get("node_runtime_error", "") if isinstance(agent_result, dict) else "",
         }
         if agent_output:
             return {"output": agent_output, "source": diagnostics["source"], "timings": timings, "request_id": request_id, "diagnostics": diagnostics}

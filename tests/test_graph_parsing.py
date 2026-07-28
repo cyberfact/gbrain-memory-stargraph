@@ -1454,6 +1454,10 @@ cover_image: companies/example-inc/logo.jpg
             "backend": "openclaw",
             "model_status": "answered",
             "openclaw_status": "ok",
+            "node_runtime_status": "ok",
+            "node_runtime_path": "/opt/local/bin/node",
+            "node_runtime_version": "v24.15.0",
+            "node_runtime_source": "configured",
         }
 
         with (
@@ -1465,6 +1469,8 @@ cover_image: companies/example-inc/logo.jpg
             result = store.ask_yoda("products/memory-stargraph", "What changed?", depth=3)
 
         self.assertFalse(result["diagnostics"]["context_cache_hit"])
+        self.assertEqual(result["diagnostics"]["node_runtime_status"], "ok")
+        self.assertEqual(result["diagnostics"]["node_runtime_path"], "/opt/local/bin/node")
         self.assertEqual(len(store.yoda_context_cache), 2)
         self.assertIn("fresh", store.yoda_context_cache)
         self.assertTrue(all(entry["created_at"] >= 700 for entry in store.yoda_context_cache.values()))
@@ -1493,7 +1499,20 @@ cover_image: companies/example-inc/logo.jpg
         completed.returncode = 0
         completed.stdout = b'noise\n{"finalAssistantVisibleText":"agent answer"}'
         completed.stderr = b"[agent] done"
-        with mock.patch("server.subprocess.run", return_value=completed) as run:
+        with (
+            mock.patch(
+                "server.select_openclaw_node_runtime",
+                return_value={
+                    "status": "ok",
+                    "path": "/opt/local/bin/node",
+                    "version": "v24.15.0",
+                    "source": "configured",
+                    "error": "",
+                    "candidates": [],
+                },
+            ),
+            mock.patch("server.subprocess.run", return_value=completed) as run,
+        ):
             answer = run_openclaw_agent("answer this", timeout=30)
 
         self.assertEqual(answer, "agent answer")

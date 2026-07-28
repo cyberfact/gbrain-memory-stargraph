@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import types
 import unittest
@@ -564,6 +565,7 @@ class ApiEndpointTests(unittest.TestCase):
                         "base_url": "http://127.0.0.1:8080/v1",
                         "api_key_env": "LOCAL_MODEL_API_KEY",
                         "agent": "",
+                        "node_path": "/opt/local/bin/node",
                         "timeout_seconds": 90,
                         "graph_query_timeout_seconds": 25,
                     },
@@ -582,6 +584,68 @@ class ApiEndpointTests(unittest.TestCase):
             self.assertEqual(saved["yoda_base_url"], "http://127.0.0.1:8080/v1")
             self.assertEqual(saved["yoda_api_key_env"], "LOCAL_MODEL_API_KEY")
             self.assertEqual(saved["yoda_timeout_seconds"], 90)
+            self.assertEqual(saved["yoda_node_path"], "/opt/local/bin/node")
+
+    def test_openclaw_node_runtime_version_gate_matches_launcher_contract(self):
+        self.assertTrue(server.openclaw_supports_node_version("v22.22.3"))
+        self.assertFalse(server.openclaw_supports_node_version("v22.22.2"))
+        self.assertFalse(server.openclaw_supports_node_version("v24.14.0"))
+        self.assertTrue(server.openclaw_supports_node_version("v24.15.0"))
+        self.assertFalse(server.openclaw_supports_node_version("v25.8.1"))
+        self.assertTrue(server.openclaw_supports_node_version("v25.9.0"))
+
+    def test_openclaw_agent_returns_unavailable_when_node_runtime_is_not_supported(self):
+        with (
+            mock.patch(
+                "server.select_openclaw_node_runtime",
+                return_value={
+                    "status": "unavailable",
+                    "path": "",
+                    "version": "",
+                    "source": "",
+                    "error": "OpenClaw requires Node.js >=24.15.0; found v24.14.0",
+                    "candidates": [],
+                },
+            ),
+            mock.patch("server.subprocess.run") as run,
+        ):
+            result = server.run_openclaw_agent("prompt", config={"timeout": 20, "model": ""}, return_details=True)
+
+        self.assertIsNone(result["output"])
+        self.assertEqual(result["openclaw_status"], "runtime_unavailable")
+        self.assertEqual(result["model_status"], "unavailable")
+        self.assertEqual(result["node_runtime_status"], "unavailable")
+        run.assert_not_called()
+
+    def test_openclaw_agent_places_selected_node_runtime_first_in_path(self):
+        completed = subprocess.CompletedProcess(
+            ["openclaw"],
+            0,
+            stdout=b'{"finalAssistantVisibleText":"model answer"}',
+            stderr=b"",
+        )
+        node_path = "/Users/toddy/.local/node-v24.15.0/bin/node"
+        with (
+            mock.patch(
+                "server.select_openclaw_node_runtime",
+                return_value={
+                    "status": "ok",
+                    "path": node_path,
+                    "version": "v24.15.0",
+                    "source": "configured",
+                    "error": "",
+                    "candidates": [],
+                },
+            ),
+            mock.patch("server.subprocess.run", return_value=completed) as run,
+        ):
+            result = server.run_openclaw_agent("prompt", config={"timeout": 20, "model": ""}, return_details=True)
+
+        self.assertEqual(result["output"], "model answer")
+        self.assertEqual(result["node_runtime_status"], "ok")
+        self.assertEqual(result["node_runtime_path"], node_path)
+        env_path = run.call_args.kwargs["env"]["PATH"]
+        self.assertTrue(env_path.startswith("/Users/toddy/.local/node-v24.15.0/bin:"))
 
     def test_ask_yoda_endpoint_clamps_depth(self):
         fake_store = FakeStore()
