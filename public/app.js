@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.157";
+const UI_VERSION = "V1.0.158";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -484,6 +484,15 @@ function apiGet(url) {
     request.onerror = () => reject(new Error(`Network error while loading ${url}`));
     request.send();
   });
+}
+
+function withSearchTimeout(promise, query, timeoutMs = 1800) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error(`Search timed out for ${query}`)), timeoutMs);
+    }),
+  ]);
 }
 
 function apiPost(url, payload = {}) {
@@ -1147,6 +1156,11 @@ function setSearchLoading(active) {
   setHudTooltip(searchButton, active ? "Searching memory nodes." : "Run search and load the best matching entity.");
 }
 
+function reportSearchTerminalState(query, reason = "no-results") {
+  const normalizedReason = reason === "timeout" ? "timed out" : "found no loaded or live result";
+  hoverLabel.textContent = `Search ${normalizedReason} for "${query}". Scope searched: exact TODO id, loaded graph, and live GBrain search when available. Try a full slug, title, tag, or summary.`;
+}
+
 async function runLazySearch(query) {
   if (state.lazySearch.loading) return;
   const submittedQuery = String(query || "").trim();
@@ -1157,20 +1171,36 @@ async function runLazySearch(query) {
   const selectionVersion = state.selectionVersion;
   try {
     prepareSearchSelectionHistory(state.focusSlug);
+    const exactTodoIdHandled = await tryExactTodoIdSearch(submittedQuery);
+    if (exactTodoIdHandled) {
+      if (exactTodoIdHandled === "loaded") reportSearchTiming(searchStartedAt);
+      return;
+    }
     const exactSlugLoaded = await tryExactSlugSearch(submittedQuery);
     if (exactSlugLoaded) {
       reportSearchTiming(searchStartedAt);
       return;
     }
-    const response = await apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`);
-    if (!response.ok) return;
-    const preferredFocus = pickSearchFocus(response.data.graph, submittedQuery) || state.focusSlug;
+    const response = await withSearchTimeout(apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`), submittedQuery);
+    if (!response.ok) {
+      reportSearchTerminalState(submittedQuery);
+      return;
+    }
+    const preferredFocus = pickSearchFocus(response.data.graph, submittedQuery);
+    if (!preferredFocus) {
+      reportSearchTerminalState(submittedQuery);
+      applyGraphPayload(response.data.graph, state.focusSlug);
+      return;
+    }
     const focusSlug = selectionVersion === state.selectionVersion ? preferredFocus : state.focusSlug;
     applyGraphPayload(response.data.graph, focusSlug);
     if (selectionVersion === state.selectionVersion && preferredFocus && state.focusSlug === preferredFocus) {
       await loadEntity(preferredFocus, { source: "search" });
     }
     reportSearchTiming(searchStartedAt);
+  } catch (error) {
+    const timedOut = String(error?.message || "").includes("timed out");
+    reportSearchTerminalState(submittedQuery, timedOut ? "timeout" : "no-results");
   } finally {
     setSearchLoading(false);
     endBusyOperation(busyToken);
@@ -1324,6 +1354,23 @@ function normalizeSearchText(value) {
   return String(value || "").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function looksLikeTodoId(value) {
+  return /^SG-\d{3,}$/i.test(String(value || "").trim());
+}
+
+function todoSlugFromBacklogMarkdown(markdown, todoId) {
+  const normalizedTodoId = String(todoId || "").trim().toUpperCase();
+  if (!normalizedTodoId) return "";
+  const row = String(markdown || "")
+    .split(/\r?\n/)
+    .find((line) => {
+      const cells = line.split("|").map((cell) => cell.trim());
+      return cells.some((cell) => cell.toUpperCase() === normalizedTodoId);
+    });
+  const match = row?.match(/\[\[([^\]]+)\]\]/);
+  return match?.[1] || "";
+}
+
 function looksLikeExactSlug(value) {
   const text = String(value || "").trim();
   const slugSegmentPattern = "[A-Za-z0-9][A-Za-z0-9" + "._-]*";
@@ -1347,6 +1394,27 @@ async function tryExactSlugSearch(slug) {
   requestRender();
   await loadEntity(slug, { source: "search" });
   return true;
+}
+
+async function tryExactTodoIdSearch(todoId) {
+  if (!looksLikeTodoId(todoId)) return false;
+  const response = await withSearchTimeout(
+    apiGet(`/api/entity-raw/${encodeURIComponent("notes/memory-starmap-todo-list")}`),
+    todoId,
+    1200,
+  );
+  const slug = todoSlugFromBacklogMarkdown(response.data?.content || "", todoId);
+  if (!slug) {
+    reportSearchTerminalState(todoId);
+    return "terminal";
+  }
+  const loaded = await tryExactSlugSearch(slug);
+  if (!loaded) {
+    reportSearchTerminalState(todoId);
+    return "terminal";
+  }
+  hoverLabel.textContent = `Found ${String(todoId).trim().toUpperCase()}: ${slug}`;
+  return "loaded";
 }
 
 function pickSearchFocus(graph, query) {
