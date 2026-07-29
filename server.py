@@ -172,7 +172,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.168"
+UI_VERSION = "V1.0.169"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -1940,7 +1940,11 @@ def run_ollama_yoda(prompt, config, return_details=False):
 def run_gbrain_think_yoda(prompt, config, return_details=False):
     model = config["model"]
     details = yoda_details("gbrain_think", model, config["timeout"])
-    command = ["think", prompt]
+    question = extract_yoda_prompt_field(prompt, "Question") or prompt
+    selected_slug = extract_yoda_prompt_field(prompt, "Selected node")
+    command = ["think", question]
+    if selected_slug:
+        command.extend(["--anchor", selected_slug])
     if model:
         command.extend(["--model", model])
     try:
@@ -1950,6 +1954,12 @@ def run_gbrain_think_yoda(prompt, config, return_details=False):
         return {"output": None, **details} if return_details else None
     details["model_status"] = "answered" if answer else "empty_output"
     return {"output": answer or None, **details} if return_details else (answer or None)
+
+
+def extract_yoda_prompt_field(prompt, label):
+    pattern = rf"(?m)^{re.escape(str(label))}:\s*(.+?)\s*$"
+    match = re.search(pattern, str(prompt or ""))
+    return match.group(1).strip() if match else ""
 
 
 def run_yoda_model(prompt, return_details=False):

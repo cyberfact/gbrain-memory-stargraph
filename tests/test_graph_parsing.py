@@ -46,6 +46,20 @@ from server import (
 
 
 class GraphParsingTests(unittest.TestCase):
+    def openclaw_yoda_config(self):
+        return {
+            "backend": "openclaw",
+            "model": "",
+            "base_url": "",
+            "api_key_env": "OPENAI_API_KEY",
+            "agent": "",
+            "timeout": 45,
+            "graph_query_timeout": 30,
+            "broad_graph_budget": 8,
+            "node_path": "",
+            "node_fallback_paths": [],
+        }
+
     def test_parse_frontmatter_preserves_folded_and_literal_titles(self):
         folded, _ = parse_frontmatter("---\ntitle: >-\n  A long\n  folded title\n---\n# Body\n")
         literal, _ = parse_frontmatter("---\ntitle: |-\n  Line one\n  Line two\n---\n# Body\n")
@@ -1083,7 +1097,11 @@ cover_image: companies/example-inc/logo.jpg
 
     def test_ask_yoda_returns_fallback_when_openclaw_unavailable(self):
         store = GraphStore()
-        with mock.patch("server.run_gbrain") as run, mock.patch("server.run_openclaw_agent", return_value=None):
+        with (
+            mock.patch("server.yoda_runtime_config", return_value=self.openclaw_yoda_config()),
+            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_openclaw_agent", return_value=None),
+        ):
             run.side_effect = [
                 "# Tony Guan\n\nEngineer",
                 "direct graph",
@@ -1124,6 +1142,7 @@ cover_image: companies/example-inc/logo.jpg
             raise AssertionError(args)
 
         with (
+            mock.patch("server.yoda_runtime_config", return_value=self.openclaw_yoda_config()),
             mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
         ):
@@ -1345,6 +1364,7 @@ cover_image: companies/example-inc/logo.jpg
             raise AssertionError(args)
 
         with (
+            mock.patch("server.yoda_runtime_config", return_value=self.openclaw_yoda_config()),
             mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
         ):

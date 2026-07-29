@@ -647,6 +647,36 @@ class ApiEndpointTests(unittest.TestCase):
         env_path = run.call_args.kwargs["env"]["PATH"]
         self.assertTrue(env_path.startswith("/Users/toddy/.local/node-v24.15.0/bin:"))
 
+    def test_gbrain_think_yoda_uses_question_and_anchor_from_prompt(self):
+        prompt = "\n".join(
+            [
+                "You are Ask Yoda inside Memory Stargraph.",
+                "Selected node: products/memory-stargraph",
+                "Question: What is Memory Stargraph?",
+                "Retrieval depth: 4",
+                "Selected node content:",
+                "# Memory Stargraph",
+            ]
+        )
+        with mock.patch("server.run_gbrain", return_value="model-backed answer") as run:
+            result = server.run_gbrain_think_yoda(
+                prompt,
+                {"model": "openai:gpt-5.2", "timeout": 60},
+                return_details=True,
+            )
+
+        self.assertEqual(result["output"], "model-backed answer")
+        self.assertEqual(result["model_status"], "answered")
+        run.assert_called_once_with(
+            "think",
+            "What is Memory Stargraph?",
+            "--anchor",
+            "products/memory-stargraph",
+            "--model",
+            "openai:gpt-5.2",
+            timeout=60,
+        )
+
     def test_ask_yoda_endpoint_clamps_depth(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):
