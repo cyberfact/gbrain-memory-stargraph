@@ -1,0 +1,36 @@
+{
+  "description": "Host metadata for Memory Stargraph recurring Codex automations. The active holder flag lives in Memory Stargraph/GBrain at the coordination slug below, not in this file.",
+  "coordination": {
+    "slug": "ops/memory-stargraph/automation-host-holder",
+    "default_holder": "timmy",
+    "stargraph_url_env": "MEMORY_STARGRAPH_WORKER_API_URL",
+    "default_stargraph_url": "http://127.0.0.1:8788"
+  },
+  "automation_ids": [
+    "memory-stargraph-capture-link-drain",
+    "gbrain-x-intelligence-capture",
+    "memory-stargraph-daily-learning-intake",
+    "memory-stargraph-ux-engineer-daily-dogfood",
+    "memory-stargraph-sre-daily-reliability",
+    "memory-stargraph-wish-to-reallity",
+    "memory-stargraph-divergent-product-discovery",
+    "memory-stargraph-goal-steward-daily-review",
+    "memory-stargraph-sre-weekly-resilience"
+  ],
+  "hosts": {
+    "tony": {
+      "kind": "local",
+      "label": "Tony local Mac",
+      "codex_home": "~/.codex",
+      "project_root": "/Users/tony/Documents/Collective Knowledge System"
+    },
+    "timmy": {
+      "kind": "ssh",
+      "label": ".85 host",
+      "ssh_target": "toddy@100.100.126.85",
+      "codex_home": "/Users/toddy/.codex",
+      "project_root": "/Users/toddy/memory-stargraph",
+      "restart_command": "/Users/toddy/.codex/packages/standalone/current/codex app-server daemon restart"
+    }
+  }
+}

@@ -544,6 +544,33 @@ Do not mark TODOs completed until all configured required targets report the exp
 
 For hosts where Memory Stargraph depends on Docker-backed GBrain Postgres and is exposed through Tailscale HTTPS, use [Memory Stargraph Docker Postgres and HTTPS Runbook](memory-stargraph-docker-postgres-https-runbook.md) before declaring the target down. In particular, check Docker Desktop startup, the existing Postgres container and volume, GBrain's HTTP LaunchAgent, Memory Stargraph's LaunchAgent, and the Tailscale Serve backend scheme in that order.
 
+## Automation Host Ownership Switch
+
+Memory Stargraph recurring Codex automations may be installed on both Tony's local Mac and the `.85` host, but only one host may own the schedule at a time. The global holder flag lives in Memory Stargraph/GBrain:
+
+```bash
+ops/memory-stargraph/automation-host-holder
+```
+
+Holder semantics:
+
+- `tony`: Tony's local Codex automations are `ACTIVE`; `.85` automations are `PAUSED`.
+- `timmy`: `.85` Codex automations are `ACTIVE`; Tony's local automations are `PAUSED`.
+
+`config/memory-stargraph-automation-host.json` is host metadata only: automation IDs, host paths, and the coordination slug. Do not treat that file as the holder source of truth.
+
+Incident fallback: if the Stargraph/GBrain coordination node cannot be read, the reconciler must use the configured `coordination.default_holder`. The default holder is `timmy`, so the `.85` host owns the schedule during a GBrain/Stargraph outage. This keeps recurring operations on the more resilient host until the coordination node becomes readable again or Tony explicitly flips it.
+
+Use the reconciler instead of editing automation files by hand. It reads/writes the Stargraph holder node, then updates host-local automation TOML files and the Codex app-server scheduler SQLite rows where present:
+
+```bash
+python3 scripts/automation/switch_stargraph_automation_host.py --holder timmy --apply --json
+python3 scripts/automation/switch_stargraph_automation_host.py --holder tony --apply --json
+python3 scripts/automation/switch_stargraph_automation_host.py --status --json
+```
+
+The switch is not complete unless both TOML and scheduler DB status agree. A previous `.85` migration failed because TOML files existed but the scheduler still referenced a nonexistent project id.
+
 ## Remote Shell Rule
 
 For remote host work, do not send complex inline SSH commands through the remote login shell. zsh/glob parsing has repeatedly broken commands that contain `[]`, `|`, `$()`, awk regexes, or nested quotes.
