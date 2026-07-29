@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.171";
+const UI_VERSION = "V1.0.172";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -5269,7 +5269,7 @@ function updateAutopilotFindingsBadge(total = 0) {
 
 function renderAutopilotFindingRow(finding) {
   const row = document.createElement("article");
-  row.className = "autopilot-finding-row relationship-wiki-row";
+  row.className = "autopilot-finding-row";
   const heading = document.createElement("div");
   heading.className = "autopilot-finding-heading";
   const check = document.createElement("strong");
@@ -5369,7 +5369,7 @@ function renderAutopilotFindingsContent() {
   modalForm.appendChild(status);
 
   const list = document.createElement("div");
-  list.className = "autopilot-findings-list relationship-wiki-list";
+  list.className = "autopilot-findings-list";
   if (!state.autopilotFindings.findings.length) {
     const empty = document.createElement("p");
     empty.className = "take-review-empty";
