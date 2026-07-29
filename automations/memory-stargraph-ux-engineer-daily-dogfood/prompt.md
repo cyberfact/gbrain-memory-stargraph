@@ -4,7 +4,7 @@ Persistent Goal: `goals/memory-stargraph-continuous-learning-local-knowledge-os`
 Product: `products/memory-stargraph`
 Backlog: `notes/memory-starmap-todo-list`
 
-This worker runs daily at 6:00 AM in `America/Los_Angeles` and may run by manual trigger at any time; there is no fixed cutoff. It is separate from the weekly Product Strategist, which owns broad product direction.
+This worker runs daily at 8:30 PM in `America/Los_Angeles` and may run by manual trigger at any time. Time-box every invocation to no more than 2 hours wall-clock from kickoff; before the cap, save durable evidence, terminalize truthfully, and release any active UX Run/lease according to this prompt. It is separate from the weekly Product Strategist, which owns broad product direction.
 
 GBrain and Memory Stargraph API access for worker roles: use top-level `curl -sS` calls to the Memory Stargraph HTTP APIs for GBrain reads, writes, search, graph, backlinks, Ask Yoda logs, health checks, and configured remote Memory Stargraph targets. Use `python3 scripts/automation/gbrain_worker_api.py routes` only to list the dashboard local route and configured remote routes from the private deployment config; do not use Python networking for worker API calls because sandboxed Python sockets may be blocked. Direct `gbrain` CLI/MCP may be used only after a successful preflight; if direct MCP fails, use the HTTP API route and record the MCP failure as evidence instead of stopping silently.
 

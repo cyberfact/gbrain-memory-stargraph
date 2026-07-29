@@ -48,7 +48,7 @@ class AutomationContractTests(unittest.TestCase):
             },
             "memory-stargraph-ux-engineer-daily-dogfood": {
                 "title": "Memory Stargraph UX Engineer",
-                "rrule": "FREQ=DAILY;BYHOUR=2;BYMINUTE=0;BYSECOND=0",
+                "rrule": "FREQ=DAILY;BYHOUR=20;BYMINUTE=30;BYSECOND=0",
                 "target_thread_id": "{{UX_ENGINEER_THREAD_ID}}",
                 "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
             },
@@ -82,7 +82,7 @@ class AutomationContractTests(unittest.TestCase):
         )
         self.assertEqual(definition["id"], "memory-stargraph-ux-engineer-daily-dogfood")
         self.assertEqual(definition["name"], "Memory Stargraph UX Engineer")
-        self.assertEqual(definition["rrule"], "FREQ=DAILY;BYHOUR=2;BYMINUTE=0;BYSECOND=0")
+        self.assertEqual(definition["rrule"], "FREQ=DAILY;BYHOUR=20;BYMINUTE=30;BYSECOND=0")
         self.assertEqual(definition["timezone"], "America/Los_Angeles")
         self.assertEqual(definition["destination"], "thread")
         self.assertEqual(definition["target_thread_id"], "{{UX_ENGINEER_THREAD_ID}}")
@@ -125,7 +125,8 @@ class AutomationContractTests(unittest.TestCase):
         for phrase in (
             "memory-stargraph-ux-engineer-daily-dogfood",
             "Memory Stargraph UX Engineer",
-            "Daily 2:00 AM",
+            "Daily 8:30 PM",
+            "2-hour cap",
             "UX reports",
             "journey coverage",
             "repeated UX",

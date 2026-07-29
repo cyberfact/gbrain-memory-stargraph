@@ -77,7 +77,7 @@ Worker Watch contract:
    - Memory Stargraph Knowledge Curator: starts 12:00 AM; first watch by 12:30 AM; expected terminal result, owned continuation, or truthful deferral within 60 minutes unless a large frozen capture snapshot shows fresh progress.
    - GBrain Intelligence Researcher: starts 12:15 AM; first watch by 12:30 AM; expected terminal result or truthful deferral within 45 minutes.
    - Memory Stargraph Quality & Learning Analyst: starts 1:00 AM; first watch by 1:30 AM; expected terminal result or truthful deferral within 45 minutes.
-   - Memory Stargraph UX Engineer: starts 2:00 AM; first watch by 2:30 AM; expected terminal result or truthful deferral before the morning Product Owner review.
+   - Memory Stargraph UX Engineer: starts 8:30 PM; first watch by 9:00 PM; expected terminal result, truthful deferral, or owned evidence save by 10:30 PM so the overnight Developer lane is not blocked.
    - Memory Stargraph SRE daily reliability: starts 3:00 AM; first watch by 3:30 AM; expected terminal result, incident handoff progress, or quiet-time deferral within 75 minutes.
    - Memory Stargraph Developer: starts 3:30 AM; first watch by 4:00 AM; expected fresh progress within 30 minutes and terminal result, failed TODO evidence, or owned continuation by 7:00 AM unless a long-running verified deployment/test is actively updating.
    - Memory Stargraph Product Owner full review: starts 7:30 AM; expected daily report and retrospective within 45 minutes; if a prior Product Owner run is still active by the 9:00 AM watch without fresh progress, treat it as blocked.
