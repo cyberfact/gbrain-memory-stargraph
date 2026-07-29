@@ -1,5 +1,5 @@
-const UI_VERSION = "V1.0.169";
-const SEARCH_TIMEOUT_MS = 30000;
+const UI_VERSION = "V1.0.170";
+const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -1178,6 +1178,12 @@ function reportSearchTerminalState(query, reason = "no-results") {
   hoverLabel.textContent = `Search ${normalizedReason} for "${query}". Scope searched: exact TODO id, loaded graph, and live GBrain search when available. Try a full slug, title, tag, or summary.`;
 }
 
+function reportSearchPartialState(query, graph) {
+  const coverage = graph?.source?.coverage || {};
+  const elapsed = coverage.search_elapsed_ms ? ` in ${coverage.search_elapsed_ms}ms` : "";
+  hoverLabel.textContent = `Search returned partial live evidence${elapsed} for "${query}". Scope searched: exact TODO id, loaded graph, live GBrain search, and bounded evidence ranking. Some slower evidence ranking timed out; refine the query or open the best result.`;
+}
+
 async function runLazySearch(query) {
   if (state.lazySearch.loading) return;
   const submittedQuery = String(query || "").trim();
@@ -1202,14 +1208,32 @@ async function runLazySearch(query) {
       reportSearchTerminalState(submittedQuery);
       return;
     }
+    const partialSearch = response.data.graph?.source?.coverage?.search_status && response.data.graph.source.coverage.search_status !== "complete";
     const preferredFocus = pickSearchFocus(response.data.graph, submittedQuery);
     if (!preferredFocus) {
-      reportSearchTerminalState(submittedQuery);
       applyGraphPayload(response.data.graph, state.focusSlug);
+      if (partialSearch) {
+        reportSearchPartialState(submittedQuery, response.data.graph);
+      } else {
+        reportSearchTerminalState(submittedQuery);
+      }
       return;
     }
     const focusSlug = selectionVersion === state.selectionVersion ? preferredFocus : state.focusSlug;
     applyGraphPayload(response.data.graph, focusSlug);
+    if (partialSearch) {
+      reportSearchPartialState(submittedQuery, response.data.graph);
+      if (selectionVersion === state.selectionVersion && preferredFocus && state.focusSlug === preferredFocus) {
+        loadEntity(preferredFocus, { source: "search" })
+          .catch(() => {})
+          .finally(() => {
+            if (String(state.query || "").trim() === submittedQuery) {
+              reportSearchPartialState(submittedQuery, response.data.graph);
+            }
+          });
+      }
+      return;
+    }
     if (selectionVersion === state.selectionVersion && preferredFocus && state.focusSlug === preferredFocus) {
       await loadEntity(preferredFocus, { source: "search" });
     }

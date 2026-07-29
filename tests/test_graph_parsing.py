@@ -135,13 +135,13 @@ class GraphParsingTests(unittest.TestCase):
         def fake_run_gbrain(*args, **_kwargs):
             if args == ("search", "exact TODO search fast terminal state"):
                 return "[0.75] categories/todo -- Todo hub\n[0.60] notes/memory-starmap-todo-list -- Todo list\n"
-            if args == ("list", "--type", "run", "-n", "120"):
+            if args == ("list", "--type", "run", "-n", "40"):
                 return "runs/memory-stargraph-wish-sg0163-20260728t021507-0700-ab843b8b\trun\t2026-07-28\tMemory Stargraph Developer SG-0163 Run\n"
-            if args == ("list", "--type", "report", "-n", "120"):
+            if args == ("list", "--type", "report", "-n", "40"):
                 return ""
-            if args == ("list", "--type", "learning", "-n", "120"):
+            if args == ("list", "--type", "learning", "-n", "40"):
                 return "learnings/memory-stargraph-20260728-exact-todo-search-fast-terminal-state\tlearning\t2026-07-28\tExact TODO-ID search needs a ready local index and terminal UI evidence\n"
-            if args == ("list", "--type", "todo", "-n", "120"):
+            if args == ("list", "--type", "todo", "-n", "40"):
                 return "notes/memory-starmap-todo-list/make-search-show-results-or-clear-terminal-state-for-exact-todo-ids\ttodo\t2026-07-28\tMake search show results or a clear terminal state for exact TODO IDs\n"
             raise AssertionError(args)
 
@@ -149,6 +149,9 @@ class GraphParsingTests(unittest.TestCase):
             graph = search_raw_graph(raw_graph, "exact TODO search fast terminal state")
 
         coverage = graph["source"]["coverage"]
+        self.assertEqual(coverage["search_status"], "complete")
+        self.assertEqual(coverage["search_primary_status"], "complete")
+        self.assertEqual(coverage["search_evidence_status"], "complete")
         self.assertEqual(
             coverage["search_slugs"][0],
             "learnings/memory-stargraph-20260728-exact-todo-search-fast-terminal-state",
@@ -162,6 +165,36 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(
             node_map["learnings/memory-stargraph-20260728-exact-todo-search-fast-terminal-state"]["tags"],
             ["lazy-search"],
+        )
+
+    def test_search_raw_graph_reports_partial_status_when_evidence_budget_expires(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "type": "root", "links": []}],
+            "edge_types": [],
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args == ("search", "optional timeout telemetry is not a todo"):
+                return "[0.82] learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo -- Optional timeout telemetry is not a TODO\n"
+            if args == ("list", "--type", "learning", "-n", "40"):
+                return "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo\tlearning\t2026-07-28\tOptional timeout telemetry is not a todo\n"
+            if args[0] == "list":
+                raise TimeoutError(args)
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "optional timeout telemetry is not a todo")
+
+        coverage = graph["source"]["coverage"]
+        self.assertEqual(graph["source"]["status"], "lazy-search-partial")
+        self.assertEqual(coverage["search_status"], "partial_timeout")
+        self.assertEqual(coverage["search_primary_status"], "complete")
+        self.assertEqual(coverage["search_evidence_status"], "partial_timeout")
+        self.assertIn(
+            "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+            coverage["search_slugs"],
         )
 
     def test_evidence_search_ignores_low_signal_page_list_matches(self):

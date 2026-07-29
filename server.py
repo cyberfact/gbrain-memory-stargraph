@@ -172,7 +172,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.169"
+UI_VERSION = "V1.0.170"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -2298,7 +2298,16 @@ def parse_search_results(output):
     return results
 
 
-EVIDENCE_SEARCH_TYPES = ("run", "report", "learning", "todo")
+EVIDENCE_SEARCH_TYPES = ("learning", "todo", "report", "run")
+SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
+SEARCH_TOTAL_BUDGET_SECONDS = 9.2
+SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
+SEARCH_TERM_SYNONYMS = {
+    "optional": ("bounded", "bound"),
+    "timeout": ("latency", "slow", "terminal"),
+    "timeouts": ("latency", "slow", "terminal"),
+    "telemetry": ("feedback", "status", "evidence"),
+}
 EVIDENCE_SEARCH_PREFIXES = (
     "runs/",
     "reports/",
@@ -2329,6 +2338,16 @@ def evidence_search_terms(query):
         for term in re.findall(r"[\w-]+", str(query or "").lower())
         if len(term) >= 3 and term not in EVIDENCE_SEARCH_STOPWORDS
     ]
+
+
+def expanded_search_terms(query):
+    terms = evidence_search_terms(query)
+    expanded = []
+    for term in terms:
+        expanded.append(term)
+        expanded.extend(SEARCH_TERM_SYNONYMS.get(term, ()))
+    seen = set()
+    return [term for term in expanded if not (term in seen or seen.add(term))][:16]
 
 
 def evidence_haystack(row):
@@ -2364,16 +2383,32 @@ def score_evidence_record(row, query, terms):
     return score
 
 
-def evidence_record_search_results(query, existing_slugs=None, per_type_limit=120, result_limit=10):
+def evidence_record_search_results(
+    query,
+    existing_slugs=None,
+    per_type_limit=40,
+    result_limit=10,
+    deadline=None,
+    per_type_timeout=2.5,
+):
     existing_slugs = set(existing_slugs or [])
     terms = evidence_search_terms(query)
     if not terms:
-        return []
+        return [], "skipped_no_terms"
     candidates = {}
+    status = "complete"
     for page_type in EVIDENCE_SEARCH_TYPES:
+        timeout = per_type_timeout
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                status = "partial_timeout"
+                break
+            timeout = max(0.5, min(per_type_timeout, remaining))
         try:
-            rows = parse_page_list(run_gbrain("list", "--type", page_type, "-n", str(per_type_limit)))
+            rows = parse_page_list(run_gbrain("list", "--type", page_type, "-n", str(per_type_limit), timeout=timeout))
         except Exception:  # noqa: BLE001
+            status = "partial_timeout"
             continue
         for row in rows:
             slug = str(row.get("slug") or "")
@@ -2402,7 +2437,7 @@ def evidence_record_search_results(query, existing_slugs=None, per_type_limit=12
             ),
             reverse=True,
         )[:result_limit]
-    ]
+    ], status
 
 
 def merge_search_results(primary_results, evidence_results):
@@ -2430,6 +2465,47 @@ def merge_search_results(primary_results, evidence_results):
         ),
         reverse=True,
     )
+
+
+def loaded_graph_search_results(raw_graph, query, existing_slugs=None, result_limit=5):
+    existing_slugs = set(existing_slugs or [])
+    terms = expanded_search_terms(query)
+    if not terms:
+        return []
+    query_text = re.sub(r"\s+", " ", str(query or "").strip().lower()).replace("_", "-")
+    candidates = []
+    for node in raw_graph.get("nodes") or []:
+        slug = str(node.get("slug") or "")
+        if not slug or slug in existing_slugs:
+            continue
+        label = str(node.get("label") or "")
+        summary = str(node.get("summary") or "")
+        tags = " ".join(str(tag) for tag in node.get("tags") or [])
+        haystack = f"{slug} {label} {summary} {tags}".lower().replace("_", "-")
+        score = 0.0
+        if query_text and query_text in haystack:
+            score += 20.0
+        for term in terms:
+            if term in slug.lower():
+                score += 3.0
+            if term in label.lower():
+                score += 2.5
+            if term in summary.lower():
+                score += 1.5
+            if term in tags.lower():
+                score += 1.0
+        if score <= 0:
+            continue
+        candidates.append(
+            {
+                "slug": slug,
+                "score": score / 10,
+                "label": label or make_label(slug),
+                "preview": summary if summary and summary != "No summary available." else "Matched loaded graph metadata while live search was bounded.",
+            }
+        )
+    candidates.sort(key=lambda item: (item["score"], item["slug"]), reverse=True)
+    return candidates[:result_limit]
 
 
 def extract_question_entities(question, limit=3):
@@ -3842,13 +3918,32 @@ def expand_raw_graph(raw_graph, center_slug):
 
 
 def search_raw_graph(raw_graph, query):
-    search_output = run_gbrain("search", query)
-    primary_results = parse_search_results(search_output)
-    evidence_results = evidence_record_search_results(
+    started = time.monotonic()
+    deadline = started + SEARCH_TOTAL_BUDGET_SECONDS
+    evidence_deadline = min(deadline, started + SEARCH_EVIDENCE_BUDGET_SECONDS)
+    evidence_results, evidence_status = evidence_record_search_results(
         query,
-        existing_slugs=[result["slug"] for result in primary_results],
+        deadline=evidence_deadline,
+        per_type_timeout=SEARCH_EVIDENCE_BUDGET_SECONDS,
     )
-    results = merge_search_results(primary_results, evidence_results)
+    primary_status = "complete"
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        primary_results = []
+        primary_status = "timeout"
+    else:
+        try:
+            search_output = run_gbrain("search", query, timeout=max(0.5, min(SEARCH_PRIMARY_TIMEOUT_SECONDS, remaining)))
+            primary_results = parse_search_results(search_output)
+        except Exception:  # noqa: BLE001
+            primary_results = []
+            primary_status = "timeout"
+    loaded_results = loaded_graph_search_results(
+        raw_graph,
+        query,
+        existing_slugs=[result["slug"] for result in evidence_results + primary_results],
+    )
+    results = merge_search_results(primary_results, evidence_results + loaded_results)
     nodes = {str(node.get("slug")): dict(node) for node in raw_graph.get("nodes", []) if node.get("slug")}
     for result in results:
         slug = result["slug"]
@@ -3872,11 +3967,19 @@ def search_raw_graph(raw_graph, query):
     coverage["last_search_query"] = query
     coverage["search_slugs"] = [result["slug"] for result in results]
     coverage["evidence_search_slugs"] = [result["slug"] for result in evidence_results]
+    coverage["loaded_graph_search_slugs"] = [result["slug"] for result in loaded_results]
+    coverage["search_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    evidence_complete = evidence_status in {"complete", "skipped_no_terms"}
+    coverage["search_status"] = "complete" if primary_status == "complete" and evidence_complete else "partial_timeout"
+    coverage["search_primary_status"] = primary_status
+    coverage["search_evidence_status"] = evidence_status
     source.update(
         {
             "mode": "gbrain",
-            "status": "lazy-search",
-            "message": "Seed graph loaded. Search results and selected-node relationships are loaded lazily.",
+            "status": "lazy-search" if coverage["search_status"] == "complete" else "lazy-search-partial",
+            "message": "Seed graph loaded. Search results and selected-node relationships are loaded lazily."
+            if coverage["search_status"] == "complete"
+            else "Search returned within the UI budget with partial live evidence because deeper evidence ranking was slow.",
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "lazy": True,
             "coverage": coverage,
