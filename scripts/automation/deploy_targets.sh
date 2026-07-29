@@ -24,9 +24,15 @@ if [[ -f "$alert_monitor" ]]; then
 fi
 
 : "${MEMORY_STARGRAPH_LOCAL_SERVICE_DIR:?missing MEMORY_STARGRAPH_LOCAL_SERVICE_DIR}"
-: "${MEMORY_STARGRAPH_DASHBOARD_RESTART_URL:?missing MEMORY_STARGRAPH_DASHBOARD_RESTART_URL}"
 : "${MEMORY_STARGRAPH_LOCAL_URL:?missing MEMORY_STARGRAPH_LOCAL_URL}"
-: "${MEMORY_STARGRAPH_DEPLOY_TARGETS:?missing MEMORY_STARGRAPH_DEPLOY_TARGETS}"
+MEMORY_STARGRAPH_DASHBOARD_RESTART_URL="${MEMORY_STARGRAPH_DASHBOARD_RESTART_URL:-}"
+MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND="${MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND:-}"
+MEMORY_STARGRAPH_LOCAL_CURL_FLAGS="${MEMORY_STARGRAPH_LOCAL_CURL_FLAGS:-}"
+MEMORY_STARGRAPH_DEPLOY_TARGETS="${MEMORY_STARGRAPH_DEPLOY_TARGETS:-}"
+if [[ -z "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL" && -z "$MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND" ]]; then
+  echo "missing MEMORY_STARGRAPH_DASHBOARD_RESTART_URL or MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND" >&2
+  exit 2
+fi
 
 tracked_files=(
   README.md
@@ -66,11 +72,20 @@ verify_url() {
 echo "== local dashboard-managed service =="
 for path in "${tracked_files[@]}"; do
   mkdir -p "$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR/$(dirname "$path")"
-  cp "$repo_root/$path" "$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR/$path"
+  source_path="$repo_root/$path"
+  destination_path="$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR/$path"
+  if [[ "$(cd "$(dirname "$source_path")" && pwd -P)/$(basename "$source_path")" == "$(cd "$(dirname "$destination_path")" && pwd -P)/$(basename "$destination_path")" ]]; then
+    continue
+  fi
+  cp "$source_path" "$destination_path"
 done
-curl -sS -X POST "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL"
+if [[ -n "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL" ]]; then
+  curl -sS -X POST "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL"
+else
+  sh -c "$MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND"
+fi
 sleep 4
-verify_url "$MEMORY_STARGRAPH_LOCAL_URL"
+verify_url "$MEMORY_STARGRAPH_LOCAL_URL" "$MEMORY_STARGRAPH_LOCAL_CURL_FLAGS"
 local_port="${MEMORY_STARGRAPH_LOCAL_URL##*:}"
 local_port="${local_port%%/*}"
 local_pid="$(lsof -nP -iTCP:"$local_port" -sTCP:LISTEN -t | head -1 || true)"

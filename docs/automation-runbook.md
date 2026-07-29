@@ -532,7 +532,7 @@ Keep deployment target details in local Codex memory/config and GBrain, not in t
 ${CODEX_HOME:-$HOME/.codex}/automations/memory-stargraph-wish-to-reallity/deployment-targets.env
 ```
 
-That local file should define the dashboard-managed local service path, restart URL, remote SSH targets, remote repo paths, restart commands, and verification URLs.
+That local file should define the dashboard-managed local service path, either `MEMORY_STARGRAPH_DASHBOARD_RESTART_URL` or `MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND`, any local curl flags needed for TLS verification, remote SSH targets, remote repo paths, restart commands, and verification URLs. Hosts may set `MEMORY_STARGRAPH_DEPLOY_TARGETS` to an empty value for local-only deploy verification when no safe remote target is configured.
 
 After commit and push, deploy the exact commit with:
 

@@ -1,0 +1,749 @@
+{
+  "metadata": {
+    "created_at": "2026-07-28T14:34:28.842295-07:00",
+    "depth": 4,
+    "provenance": {
+      "environment": "test",
+      "producer": "yoda_gap_evaluator",
+      "synthetic": true,
+      "test_run": true
+    },
+    "question_count": 10,
+    "run_id": "20260728T142711-0700"
+  },
+  "questions": [
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": false,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 12,
+          "prompt_chars": 35405,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 3623,
+          "current_todo_state": 9159,
+          "direct_reads": 8540,
+          "graph": 8080,
+          "operational_state": 20389,
+          "search": 3304,
+          "selected_node": 4098,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[75064]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274031827",
+        "selected_slug": "goals/memory-stargraph-continuous-learning-local-knowledge-os",
+        "source": "fallback",
+        "stderr_preview": "dyld[75064]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 194,
+          "prompt_ms": 49629,
+          "total_ms": 49824
+        }
+      },
+      "elapsed_ms": 57146,
+      "gap": {
+        "decision": "no_action",
+        "summary": "Codex sees current planned work SG-0164/SG-0165 plus this run\u2019s Ask Yoda runtime candidate; no additional dev-cycle TODO qualified from this question."
+      },
+      "id": "dev-cycle-gaps",
+      "intent": "daily dev gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:dev-cycle-gaps",
+      "question": "From recent daily dev Runs, commits, TODO movement, and Learnings, what gaps still block Memory Stargraph from the continuous-learning local knowledge OS goal?",
+      "request_id": "yoda-1785274031827",
+      "slug": "goals/memory-stargraph-continuous-learning-local-knowledge-os",
+      "timings": {
+        "model_ms": 194,
+        "prompt_ms": 49629,
+        "total_ms": 49824
+      },
+      "yoda_answer": "Question: From recent daily dev Runs, commits, TODO movement, and Learnings, what gaps still block Memory Stargraph from the continuous-learning local knowledge OS goal?\nSelected node: goals/memory-stargraph-continuous-learning-local-knowledge-os\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": true,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 12,
+          "prompt_chars": 35385,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 0,
+          "current_todo_state": 8542,
+          "direct_reads": 6336,
+          "graph": 0,
+          "operational_state": 15319,
+          "search": 3649,
+          "selected_node": 0,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[75538]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274088933",
+        "selected_slug": "goals/memory-stargraph-continuous-learning-local-knowledge-os",
+        "source": "fallback",
+        "stderr_preview": "dyld[75538]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 170,
+          "prompt_ms": 33849,
+          "total_ms": 34019
+        }
+      },
+      "elapsed_ms": 40869,
+      "gap": {
+        "decision": "no_action",
+        "summary": "SRE daily retry and weekly resilience recovery are terminal with healthy local/remote evidence; remaining real-fault skip is approval-gated and already recorded."
+      },
+      "id": "monitoring-gaps",
+      "intent": "monitoring gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:monitoring-gaps",
+      "question": "Looking at monitoring, SRE reports, health checks, backups, and resolver evidence, what reliability or observability gaps should be fixed next?",
+      "request_id": "yoda-1785274088933",
+      "slug": "goals/memory-stargraph-continuous-learning-local-knowledge-os",
+      "timings": {
+        "model_ms": 170,
+        "prompt_ms": 33849,
+        "total_ms": 34019
+      },
+      "yoda_answer": "Question: Looking at monitoring, SRE reports, health checks, backups, and resolver evidence, what reliability or observability gaps should be fixed next?\nSelected node: goals/memory-stargraph-continuous-learning-local-knowledge-os\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": false,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "prompt_chars": 25085,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 4095,
+          "current_todo_state": 5119,
+          "direct_reads": 7177,
+          "graph": 8021,
+          "search": 3274,
+          "selected_node": 4165,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[75813]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274129802",
+        "selected_slug": "notes/memory-starmap-todo-list",
+        "source": "fallback",
+        "stderr_preview": "dyld[75813]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 172,
+          "prompt_ms": 23600,
+          "total_ms": 23773
+        }
+      },
+      "elapsed_ms": 32696,
+      "gap": {
+        "decision": "no_action",
+        "summary": "Backlog has SG-0164 and SG-0165 planned and still appropriately prioritized; no stale/duplicate/failed row qualified beyond new Ask Yoda runtime candidate."
+      },
+      "id": "todo-priority-gaps",
+      "intent": "TODO prioritization gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:todo-priority-gaps",
+      "question": "Which planned or failed TODOs appear under-prioritized, stale, duplicated, or missing acceptance evidence, and why?",
+      "request_id": "yoda-1785274129802",
+      "slug": "notes/memory-starmap-todo-list",
+      "timings": {
+        "model_ms": 172,
+        "prompt_ms": 23600,
+        "total_ms": 23773
+      },
+      "yoda_answer": "Question: Which planned or failed TODOs appear under-prioritized, stale, duplicated, or missing acceptance evidence, and why?\nSelected node: notes/memory-starmap-todo-list\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": true,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 12,
+          "prompt_chars": 38405,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 0,
+          "current_todo_state": 8517,
+          "direct_reads": 15582,
+          "graph": 0,
+          "operational_state": 15621,
+          "search": 3686,
+          "selected_node": 0,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[76349]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274162495",
+        "selected_slug": "notes/memory-starmap-todo-list",
+        "source": "fallback",
+        "stderr_preview": "dyld[76349]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 238,
+          "prompt_ms": 43409,
+          "total_ms": 43647
+        }
+      },
+      "elapsed_ms": 56070,
+      "gap": {
+        "decision": "no_action",
+        "summary": "The evidence-to-TODO loop is working today: Product Strategist promoted SG-0164/SG-0165, UX updated them, and this intake promotes one distinct runtime candidate."
+      },
+      "id": "todo-feedback-loop",
+      "intent": "TODO feedback-loop gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:todo-feedback-loop",
+      "question": "Where does the loop from external evidence to TODO to implementation to Run evidence to durable Learning break down?",
+      "request_id": "yoda-1785274162495",
+      "slug": "notes/memory-starmap-todo-list",
+      "timings": {
+        "model_ms": 238,
+        "prompt_ms": 43409,
+        "total_ms": 43647
+      },
+      "yoda_answer": "Question: Where does the loop from external evidence to TODO to implementation to Run evidence to durable Learning break down?\nSelected node: notes/memory-starmap-todo-list\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: preserve a durable learning that evaluator transport health and model execution health are distinct. The hostname TLS route can be healthy while OpenClaw model execution fails later inside Ask Yoda diagnostics.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": false,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "prompt_chars": 17870,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 9259,
+          "direct_reads": 10982,
+          "graph": 8053,
+          "search": 6550,
+          "selected_node": 9490,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[76757]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274218699",
+        "selected_slug": "notes/memory-stargraph-automation-runbook",
+        "source": "fallback",
+        "stderr_preview": "dyld[76757]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 282,
+          "prompt_ms": 27033,
+          "total_ms": 27316
+        }
+      },
+      "elapsed_ms": 34906,
+      "gap": {
+        "decision": "learning_only",
+        "evidence": [
+          "10/10 evaluator requests returned Ask Yoda fallback answers with source=fallback and model_status=nonzero_exit.",
+          "Each diagnostic stderr_preview/error_summary names /usr/local/Cellar/node/25.8.1_1/bin/node failing to load /usr/local/opt/simdjson/lib/libsimdjson.31.dylib."
+        ],
+        "summary": "The evaluator itself confirmed a useful operating lesson: TLS hostname routing avoided urllib certificate failure, while diagnostics revealed model-runner failure separately from retrieval health."
+      },
+      "id": "logs-learning-gaps",
+      "intent": "logs and runbook gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:logs-learning-gaps",
+      "question": "From recent worker logs and runbook rules, what repeated failure patterns are not yet turned into reliable automation behavior?",
+      "request_id": "yoda-1785274218699",
+      "slug": "notes/memory-stargraph-automation-runbook",
+      "timings": {
+        "model_ms": 282,
+        "prompt_ms": 27033,
+        "total_ms": 27316
+      },
+      "yoda_answer": "Question: From recent worker logs and runbook rules, what repeated failure patterns are not yet turned into reliable automation behavior?\nSelected node: notes/memory-stargraph-automation-runbook\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review found that the strongest current Ask Yoda quality gap is not retrieval disagreement but model unavailability: every synthetic evaluator request assembled context, then returned fallback-only text because OpenClaw/Node failed to launch with a missing simdjson dylib. This should become a bounded Developer TODO to make Ask Yoda model execution independent of the broken host Node path or to verify a documented fallback runner.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": false,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 9,
+          "prompt_chars": 37232,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 1,
+          "targeted_entities": 1
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 4078,
+          "current_todo_state": 5454,
+          "direct_reads": 8191,
+          "graph": 8023,
+          "operational_state": 13464,
+          "search": 6416,
+          "selected_node": 4253,
+          "targeted_relationships": 8595
+        },
+        "depth": 4,
+        "error_summary": "dyld[77333]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274253487",
+        "selected_slug": "products/memory-stargraph",
+        "source": "fallback",
+        "stderr_preview": "dyld[77333]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 212,
+          "prompt_ms": 50160,
+          "total_ms": 50373
+        }
+      },
+      "elapsed_ms": 56257,
+      "gap": {
+        "decision": "todo_candidate",
+        "evidence": [
+          "10/10 evaluator requests returned Ask Yoda fallback answers with source=fallback and model_status=nonzero_exit.",
+          "Each diagnostic stderr_preview/error_summary names /usr/local/Cellar/node/25.8.1_1/bin/node failing to load /usr/local/opt/simdjson/lib/libsimdjson.31.dylib.",
+          "Requests were synthetic/test with stable pair_id prefix yoda-evaluator:20260728T142711-0700 and context_degraded=false, so evidence is auditable and excluded from production scoring.",
+          "Current dashboard health is V1.0.165 over TLS; retrieval/context assembly succeeded, but model execution did not."
+        ],
+        "severity": "P1",
+        "summary": "Ask Yoda answer quality is materially degraded because model execution is unavailable on this host; all evaluator answers were fallback-only despite successful context gathering.",
+        "title": "Make Ask Yoda model execution independent of broken host Node path"
+      },
+      "id": "ask-yoda-quality",
+      "intent": "Ask Yoda quality gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:ask-yoda-quality",
+      "question": "What Ask Yoda answer-quality gaps are visible from recent history, logs, feedback, and retrieval behavior?",
+      "request_id": "yoda-1785274253487",
+      "slug": "products/memory-stargraph",
+      "timings": {
+        "model_ms": 212,
+        "prompt_ms": 50160,
+        "total_ms": 50373
+      },
+      "yoda_answer": "Question: What Ask Yoda answer-quality gaps are visible from recent history, logs, feedback, and retrieval behavior?\nSelected node: products/memory-stargraph\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": true,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 8,
+          "prompt_chars": 35736,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 0,
+          "current_todo_state": 7440,
+          "direct_reads": 7575,
+          "graph": 0,
+          "operational_state": 12197,
+          "search": 3769,
+          "selected_node": 0,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[77659]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274309729",
+        "selected_slug": "products/memory-stargraph",
+        "source": "fallback",
+        "stderr_preview": "dyld[77659]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 190,
+          "prompt_ms": 30984,
+          "total_ms": 31175
+        }
+      },
+      "elapsed_ms": 37893,
+      "gap": {
+        "decision": "no_action",
+        "summary": "No relationship/backlink/capture mutation qualified; the observed failure is model-runner availability, not graph data quality."
+      },
+      "id": "data-quality-gaps",
+      "intent": "relationship and backlink gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:data-quality-gaps",
+      "question": "Which data-quality, relationship, backlink, or capture-quality gaps would most improve future Ask Yoda answers?",
+      "request_id": "yoda-1785274309729",
+      "slug": "products/memory-stargraph",
+      "timings": {
+        "model_ms": 190,
+        "prompt_ms": 30984,
+        "total_ms": 31175
+      },
+      "yoda_answer": "Question: Which data-quality, relationship, backlink, or capture-quality gaps would most improve future Ask Yoda answers?\nSelected node: products/memory-stargraph\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": true,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 12,
+          "prompt_chars": 36439,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 0,
+          "current_todo_state": 5250,
+          "direct_reads": 10426,
+          "graph": 0,
+          "operational_state": 13511,
+          "search": 2701,
+          "selected_node": 0,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[78044]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274347622",
+        "selected_slug": "products/memory-stargraph",
+        "source": "fallback",
+        "stderr_preview": "dyld[78044]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 215,
+          "prompt_ms": 31891,
+          "total_ms": 32107
+        }
+      },
+      "elapsed_ms": 40788,
+      "gap": {
+        "decision": "no_action",
+        "summary": "Fresh UX evidence already updates SG-0164 and SG-0165; creating another onboarding/search TODO would duplicate planned work."
+      },
+      "id": "ux-gaps",
+      "intent": "user experience gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:ux-gaps",
+      "question": "What usability or onboarding gaps make Memory Stargraph harder to use than it should be?",
+      "request_id": "yoda-1785274347622",
+      "slug": "products/memory-stargraph",
+      "timings": {
+        "model_ms": 215,
+        "prompt_ms": 31891,
+        "total_ms": 32107
+      },
+      "yoda_answer": "Question: What usability or onboarding gaps make Memory Stargraph harder to use than it should be?\nSelected node: products/memory-stargraph\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": true,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 10,
+          "prompt_chars": 37200,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 1,
+          "targeted_entities": 1
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 0,
+          "current_todo_state": 5254,
+          "direct_reads": 6714,
+          "graph": 0,
+          "operational_state": 12887,
+          "search": 4582,
+          "selected_node": 0,
+          "targeted_relationships": 9824
+        },
+        "depth": 4,
+        "error_summary": "dyld[78504]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274388418",
+        "selected_slug": "notes/memory-stargraph-automation-runbook",
+        "source": "fallback",
+        "stderr_preview": "dyld[78504]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 188,
+          "prompt_ms": 39264,
+          "total_ms": 39453
+        }
+      },
+      "elapsed_ms": 46446,
+      "gap": {
+        "decision": "no_action",
+        "summary": "Source-sync, TLS route selection, synthetic provenance, and planned pending Product Owner delivery evidence are covered in this Run/report; no separate governance TODO qualified."
+      },
+      "id": "automation-governance",
+      "intent": "automation governance gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:automation-governance",
+      "question": "Which worker coordination, Product Owner watch, or human-control gaps could cause silent failures or unsafe automation?",
+      "request_id": "yoda-1785274388418",
+      "slug": "notes/memory-stargraph-automation-runbook",
+      "timings": {
+        "model_ms": 188,
+        "prompt_ms": 39264,
+        "total_ms": 39453
+      },
+      "yoda_answer": "Question: Which worker coordination, Product Owner watch, or human-control gaps could cause silent failures or unsafe automation?\nSelected node: notes/memory-stargraph-automation-runbook\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    },
+    {
+      "codex_answer": "Codex review: no new bounded TODO qualified from this question after deduping against SG-0164, SG-0165, SRE/UX/Product Strategist evidence, and the single Ask Yoda runtime candidate promoted from ask-yoda-quality.",
+      "diagnostics": {
+        "broad_graph_budget_ms": 8000,
+        "broad_graph_status": "optional_timeout",
+        "broad_graph_unavailable_reason": "broad_graph_timeout",
+        "context_cache_hit": true,
+        "context_counts": {
+          "broad_graph_depth": 4,
+          "current_todo_child_reads": 2,
+          "current_todo_rows": 2,
+          "direct_reads": 4,
+          "history_messages": 0,
+          "operational_state_child_reads": 6,
+          "operational_state_rows": 9,
+          "prompt_chars": 35943,
+          "relationship_source_reads": 0,
+          "retrieval_history_used": false,
+          "search_results": 6,
+          "targeted_backlink_reads": 0,
+          "targeted_entities": 0
+        },
+        "context_degraded": false,
+        "context_degraded_reason": "",
+        "context_subphases_ms": {
+          "assembly": 0,
+          "backlinks": 0,
+          "current_todo_state": 5962,
+          "direct_reads": 6847,
+          "graph": 0,
+          "operational_state": 11966,
+          "search": 2779,
+          "selected_node": 0,
+          "targeted_relationships": 0
+        },
+        "depth": 4,
+        "error_summary": "dyld[78846]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "fallback_used": true,
+        "model_backend": "openclaw",
+        "model_name": "",
+        "model_status": "nonzero_exit",
+        "openclaw_status": "exit_-6",
+        "request_id": "yoda-1785274434862",
+        "selected_slug": "products/memory-stargraph",
+        "source": "fallback",
+        "stderr_preview": "dyld[78846]: Library not loaded: /usr/local/opt/simdjson/lib/libsimdjson.31.dylib\n  Referenced from: <445947BA-C1B5-35EC-BD27-6EEEA068B49D> /usr/local/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/opt/simdjson/lib/libsimdjson.31.dylib' (no such file), '/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.dylib' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/usr/local/Cellar/simdjson/4.6.4/lib/libsimdjson.31.",
+        "stdout_preview": "",
+        "timings": {
+          "model_ms": 125,
+          "prompt_ms": 27557,
+          "total_ms": 27683
+        }
+      },
+      "elapsed_ms": 34000,
+      "gap": {
+        "decision": "no_action",
+        "summary": "Adoption/productization gaps are represented by SG-0164; no additional bounded customer evidence beyond the model-runner candidate qualified today."
+      },
+      "id": "adoption-productization",
+      "intent": "productization gap discovery",
+      "ok": true,
+      "pair_id": "yoda-evaluator:20260728T142711-0700:adoption-productization",
+      "question": "What productization, packaging, or customer-adoption gaps are now evident from daily dev, monitoring, TODOs, and logs?",
+      "request_id": "yoda-1785274434862",
+      "slug": "products/memory-stargraph",
+      "timings": {
+        "model_ms": 125,
+        "prompt_ms": 27557,
+        "total_ms": 27683
+      },
+      "yoda_answer": "Question: What productization, packaging, or customer-adoption gaps are now evident from daily dev, monitoring, TODOs, and logs?\nSelected node: products/memory-stargraph\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now.",
+      "yoda_source": "fallback"
+    }
+  ]
+}

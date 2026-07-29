@@ -169,6 +169,25 @@ class AutomationContractTests(unittest.TestCase):
         ):
             self.assertIn(path, deploy)
 
+        self.assertIn("MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND", deploy)
+        self.assertIn("MEMORY_STARGRAPH_LOCAL_CURL_FLAGS", deploy)
+        self.assertIn(
+            'MEMORY_STARGRAPH_DEPLOY_TARGETS="${MEMORY_STARGRAPH_DEPLOY_TARGETS:-}"',
+            deploy,
+        )
+
+    def test_gbrain_x_intelligence_has_agent_reach_path_fallback(self):
+        prompt = (
+            ROOT / "automations/gbrain-x-intelligence-capture/prompt.md"
+        ).read_text()
+
+        for phrase in (
+            "$HOME/.local/bin",
+            "/Users/toddy/.local/bin/agent-reach",
+            "Agent Reach capability gap",
+        ):
+            self.assertIn(phrase, prompt)
+
     def test_daily_learning_intake_has_source_sync_preflight_contract(self):
         prompt = (
             ROOT / "automations/memory-stargraph-daily-learning-intake/prompt.md"

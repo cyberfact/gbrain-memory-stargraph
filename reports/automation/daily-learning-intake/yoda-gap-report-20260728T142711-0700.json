@@ -1,0 +1,35 @@
+{
+  "metadata": {
+    "candidate_count": 1,
+    "created_at": "2026-07-28T14:34:28.842295-07:00",
+    "depth": 4,
+    "provenance": {
+      "environment": "test",
+      "producer": "yoda_gap_evaluator",
+      "synthetic": true,
+      "test_run": true
+    },
+    "question_count": 10,
+    "question_log": {
+      "added": 8,
+      "path": "data/yoda_gap_evaluator_question_log.json",
+      "suppressed_count": 8,
+      "updated": 0
+    },
+    "reviewed_count": 10,
+    "run_id": "20260728T142711-0700"
+  },
+  "review_instruction": "Create or update Memory Stargraph TODOs only for bounded, deduplicated, evidence-backed candidates.",
+  "todo_candidates": [
+    {
+      "codex_answer_excerpt": "Codex review found that the strongest current Ask Yoda quality gap is not retrieval disagreement but model unavailability: every synthetic evaluator request assembled context, then returned fallback-only text because OpenClaw/Node failed to launch with a missing simdjson dylib. This should become a bounded Developer TODO to make Ask Yoda model execution independent of the broken host Node path or to verify a documented fallback runner.",
+      "evidence_summary": "Ask Yoda answer quality is materially degraded because model execution is unavailable on this host; all evaluator answers were fallback-only despite successful context gathering. Evidence: 10/10 evaluator requests returned Ask Yoda fallback answers with source=fallback and model_status=nonzero_exit.; Each diagnostic stderr_preview/error_summary names /usr/local/Cellar/node/25.8.1_1/bin/node failing to load /usr/local/opt/simdjson/lib/libsimdjson.31.dylib.; Requests were synthetic/test with stable pair_id prefix yoda-evaluator:20260728T142711-0700 and context_degraded=false, so evidence is auditable and excluded from production scoring.; Current dashboard health is V1.0.165 over TLS; retrieval/context assembly succeeded, but model execution did not.",
+      "priority": "P1",
+      "question": "What Ask Yoda answer-quality gaps are visible from recent history, logs, feedback, and retrieval behavior?",
+      "source_question_id": "ask-yoda-quality",
+      "source_slug": "products/memory-stargraph",
+      "title": "Make Ask Yoda model execution independent of broken host Node path",
+      "yoda_answer_excerpt": "Question: What Ask Yoda answer-quality gaps are visible from recent history, logs, feedback, and retrieval behavior?\nSelected node: products/memory-stargraph\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now."
+    }
+  ]
+}
