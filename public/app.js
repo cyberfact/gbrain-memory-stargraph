@@ -1,8 +1,9 @@
-const UI_VERSION = "V1.0.170";
+const UI_VERSION = "V1.0.171";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
+const AUTOPILOT_FINDINGS_PAGE_SIZE = 20;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
@@ -113,6 +114,14 @@ const state = {
     loading: false,
     message: "",
   },
+  autopilotFindings: {
+    findings: [],
+    total: 0,
+    stateFilter: "",
+    offset: 0,
+    loading: false,
+    message: "",
+  },
   busyOperations: new Map(),
   busyOperationId: 0,
   animationTick: 0,
@@ -137,6 +146,8 @@ const navSearchButton = document.getElementById("navSearchButton");
 const navTakeReviewButton = document.getElementById("navTakeReviewButton");
 const navResolverButton = document.getElementById("navResolverButton");
 const navAutopilotButton = document.getElementById("navAutopilotButton");
+const autopilotFindingsButton = document.getElementById("autopilotFindingsButton");
+const autopilotFindingsBadge = document.getElementById("autopilotFindingsBadge");
 const navSettingsButton = document.getElementById("navSettingsButton");
 const searchFlyout = document.getElementById("searchFlyout");
 const autopilotFlyout = document.getElementById("autopilotFlyout");
@@ -5246,6 +5257,190 @@ function checkedValues(name) {
   return [...modalForm.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
 }
 
+function findingStateLabel(value) {
+  return String(value || "open").replaceAll("_", " ");
+}
+
+function updateAutopilotFindingsBadge(total = 0) {
+  if (!autopilotFindingsBadge) return;
+  autopilotFindingsBadge.textContent = total > 99 ? "99+" : String(Math.max(0, total));
+  autopilotFindingsBadge.hidden = total <= 0;
+}
+
+function renderAutopilotFindingRow(finding) {
+  const row = document.createElement("article");
+  row.className = "autopilot-finding-row relationship-wiki-row";
+  const heading = document.createElement("div");
+  heading.className = "autopilot-finding-heading";
+  const check = document.createElement("strong");
+  check.textContent = finding.check_name || "unknown check";
+  const stateBadge = document.createElement("span");
+  stateBadge.className = `autopilot-finding-state is-${finding.state || "open"}`;
+  stateBadge.textContent = findingStateLabel(finding.state);
+  heading.append(check, stateBadge);
+
+  const rationale = document.createElement("p");
+  rationale.className = "autopilot-finding-rationale";
+  rationale.textContent = finding.rationale || "No rationale supplied.";
+  const meta = document.createElement("p");
+  meta.className = "autopilot-finding-meta";
+  meta.textContent = [
+    finding.severity || "unknown severity",
+    finding.source_id || "default",
+    finding.owner ? `owner ${finding.owner}` : "",
+    `repairs ${Number(finding.repair_attempts || 0)}`,
+    `failed checks ${Number(finding.postcondition_failures || 0)}`,
+  ].filter(Boolean).join(" · ");
+  row.append(heading, rationale, meta);
+
+  if (finding.recommended_action) {
+    const action = document.createElement("p");
+    action.className = "autopilot-finding-action";
+    action.textContent = finding.recommended_action;
+    row.appendChild(action);
+  }
+
+  if (finding.acknowledged_at) {
+    const acknowledged = document.createElement("span");
+    acknowledged.className = "autopilot-finding-acknowledged";
+    acknowledged.textContent = `Acknowledged by ${finding.acknowledged_by || "operator"}`;
+    row.appendChild(acknowledged);
+  } else if (finding.state !== "resolved") {
+    const acknowledge = document.createElement("button");
+    acknowledge.type = "button";
+    acknowledge.className = "ghost-button compact-button";
+    acknowledge.textContent = "Acknowledge";
+    acknowledge.addEventListener("click", async () => {
+      const response = await apiPost(`/api/autopilot-findings/${finding.id}/acknowledge`, {});
+      state.autopilotFindings.message = response.ok
+        ? `Finding ${finding.id} acknowledged.`
+        : response.data?.error || `Acknowledge failed with ${response.status}`;
+      await loadAutopilotFindings();
+    });
+    row.appendChild(acknowledge);
+  }
+  return row;
+}
+
+function renderAutopilotFindingsContent() {
+  modalForm.innerHTML = "";
+  const toolbar = document.createElement("div");
+  toolbar.className = "autopilot-findings-toolbar";
+  const stateFilter = document.createElement("select");
+  stateFilter.id = "autopilotFindingState";
+  [
+    ["", "All states"],
+    ["open", "Open"],
+    ["queued", "Queued"],
+    ["repairing", "Repairing"],
+    ["blocked", "Blocked"],
+    ["awaiting_approval", "Awaiting approval"],
+    ["escalated", "Escalated"],
+    ["resolved", "Resolved"],
+  ].forEach(([value, label]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    stateFilter.appendChild(option);
+  });
+  stateFilter.value = state.autopilotFindings.stateFilter;
+  stateFilter.addEventListener("change", () => {
+    state.autopilotFindings.stateFilter = stateFilter.value;
+    state.autopilotFindings.offset = 0;
+    void loadAutopilotFindings();
+  });
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.className = "ghost-button compact-button";
+  refresh.textContent = "Refresh";
+  refresh.addEventListener("click", () => void loadAutopilotFindings());
+  toolbar.append(stateFilter, refresh);
+  modalForm.appendChild(toolbar);
+
+  const notice = document.createElement("p");
+  notice.className = "autopilot-findings-notice";
+  notice.textContent = "A completed job is not treated as resolved until GBrain verifies the condition.";
+  modalForm.appendChild(notice);
+
+  const status = document.createElement("p");
+  status.className = "take-review-status-line";
+  status.textContent = state.autopilotFindings.message
+    || `${state.autopilotFindings.total} durable follow-up${state.autopilotFindings.total === 1 ? "" : "s"}`;
+  modalForm.appendChild(status);
+
+  const list = document.createElement("div");
+  list.className = "autopilot-findings-list relationship-wiki-list";
+  if (!state.autopilotFindings.findings.length) {
+    const empty = document.createElement("p");
+    empty.className = "take-review-empty";
+    empty.textContent = state.autopilotFindings.loading ? "Loading follow-ups..." : "No follow-ups match this state.";
+    list.appendChild(empty);
+  } else {
+    state.autopilotFindings.findings.forEach((finding) => list.appendChild(renderAutopilotFindingRow(finding)));
+  }
+  modalForm.appendChild(list);
+
+  const pager = document.createElement("div");
+  pager.className = "take-review-pager";
+  const previous = document.createElement("button");
+  previous.type = "button";
+  previous.className = "ghost-button compact-button";
+  previous.textContent = "Previous";
+  previous.disabled = state.autopilotFindings.offset <= 0;
+  previous.addEventListener("click", () => {
+    state.autopilotFindings.offset = Math.max(0, state.autopilotFindings.offset - AUTOPILOT_FINDINGS_PAGE_SIZE);
+    void loadAutopilotFindings();
+  });
+  const position = document.createElement("span");
+  position.className = "take-review-page-position";
+  const currentPage = Math.floor(state.autopilotFindings.offset / AUTOPILOT_FINDINGS_PAGE_SIZE) + 1;
+  const totalPages = Math.max(1, Math.ceil(state.autopilotFindings.total / AUTOPILOT_FINDINGS_PAGE_SIZE));
+  position.textContent = `Page ${currentPage} of ${totalPages}`;
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "ghost-button compact-button";
+  next.textContent = "Next";
+  next.disabled = state.autopilotFindings.offset + AUTOPILOT_FINDINGS_PAGE_SIZE >= state.autopilotFindings.total;
+  next.addEventListener("click", () => {
+    state.autopilotFindings.offset += AUTOPILOT_FINDINGS_PAGE_SIZE;
+    void loadAutopilotFindings();
+  });
+  pager.append(previous, position, next);
+  modalForm.appendChild(pager);
+}
+
+async function loadAutopilotFindings() {
+  state.autopilotFindings.loading = true;
+  state.autopilotFindings.message = "Loading Autopilot follow-ups...";
+  renderAutopilotFindingsContent();
+  const params = new URLSearchParams();
+  params.set("limit", String(AUTOPILOT_FINDINGS_PAGE_SIZE));
+  params.set("offset", String(state.autopilotFindings.offset));
+  if (state.autopilotFindings.stateFilter) params.set("state", state.autopilotFindings.stateFilter);
+  const busyToken = beginBusyOperation("Loading Autopilot follow-ups");
+  try {
+    const response = await apiGet(`/api/autopilot-findings?${params.toString()}`);
+    if (!response.ok) throw new Error(response.data?.error || `Follow-up load failed with ${response.status}`);
+    state.autopilotFindings.findings = response.data.findings || [];
+    state.autopilotFindings.total = Number(response.data.total || 0);
+    state.autopilotFindings.message = "";
+    if (!state.autopilotFindings.stateFilter) updateAutopilotFindingsBadge(state.autopilotFindings.total);
+  } catch (error) {
+    state.autopilotFindings.findings = [];
+    state.autopilotFindings.total = 0;
+    state.autopilotFindings.message = error.message || String(error);
+  } finally {
+    state.autopilotFindings.loading = false;
+    endBusyOperation(busyToken);
+    renderAutopilotFindingsContent();
+  }
+}
+
+async function refreshAutopilotFindingsBadge() {
+  const response = await apiGet("/api/autopilot-findings?limit=1&offset=0");
+  if (response.ok) updateAutopilotFindingsBadge(Number(response.data.total || 0));
+}
+
 function takeProposalId(proposal) {
   return String(proposal?.id || proposal?.proposal_id || proposal?.row_num || "");
 }
@@ -5960,7 +6155,7 @@ function closeModal() {
 
 async function openNodeModal(action, slug = state.focusSlug) {
   hideContextMenu();
-  if (!["new-node", "tour-plan", "yoda-model", "gbrain-backend"].includes(action) && !slug) return;
+  if (!["new-node", "tour-plan", "autopilot-findings", "yoda-model", "gbrain-backend"].includes(action) && !slug) return;
   const node = state.nodeMap.get(slug);
   const label = node?.label || slug;
   state.modalAction = { action, slug, label };
@@ -6023,6 +6218,23 @@ async function openNodeModal(action, slug = state.focusSlug) {
     setModalControlTooltips("Play", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("input")?.focus();
+    return;
+  }
+
+  if (action === "autopilot-findings") {
+    state.modalAction = { action, slug: "", label: "Autopilot Follow-ups" };
+    modalTitle.textContent = "Autopilot Follow-ups";
+    modalKicker.textContent = "GBrain findings";
+    modalPrimaryButton.textContent = "Close";
+    modalCancelButton.hidden = true;
+    modalMessage.textContent = "";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    operationModal.classList.remove("compact-modal");
+    setModalControlTooltips("Close", "");
+    operationModal.hidden = false;
+    state.autopilotFindings.offset = 0;
+    await loadAutopilotFindings();
     return;
   }
 
@@ -6499,7 +6711,7 @@ async function runModalPrimaryAction() {
     return;
   }
   const { action, slug, label } = state.modalAction;
-  if (action === "view" || action === "media" || action === "result" || action === "take-review" || action === "setup-diagnostics" || action === "activation-funnel" || action === "sample-brain" || action === "memory-digest") {
+  if (action === "view" || action === "media" || action === "result" || action === "take-review" || action === "autopilot-findings" || action === "setup-diagnostics" || action === "activation-funnel" || action === "sample-brain" || action === "memory-digest") {
     closeModal();
     return;
   }
@@ -7360,6 +7572,11 @@ function bindEvents() {
     showFloatingPanel(autopilotFlyout, navAutopilotButton);
     void openNodeModal("tour-plan", state.focusSlug || "");
   });
+  autopilotFindingsButton?.addEventListener("click", () => {
+    state.tour.toolbarPinned = true;
+    showFloatingPanel(autopilotFlyout, navAutopilotButton);
+    void openNodeModal("autopilot-findings", "");
+  });
   tourButton?.addEventListener("click", () => {
     toggleTour();
   });
@@ -7801,6 +8018,7 @@ async function init() {
   await prefetchTodoBacklogForSearch();
   await fetchHidden();
   await loadPersistentYodaLogs();
+  await refreshAutopilotFindingsBadge();
   const requestedSlug = requestedSlugFromLocation();
   await fetchGraph();
   if (requestedSlug) {

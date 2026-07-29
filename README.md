@@ -82,6 +82,12 @@ The Ask Yoda **View Log** button opens a scrollable diagnostics window for the l
 
 Autopilot can play a generated list from the currently visible map or a manually edited list. The Auto list is read-only and is enabled by default. Turn Auto list off in the Plan window to edit the Manual plan, use **Fill** to replace the manual list from visible nodes, **Add** for blank entries, or **Clear** to empty the plan after confirmation. Slug fields show cached matches after two characters; press Return for live GBrain search when the cached list is not enough. Delay starts after the selected node fully loads, or after the 20-second partial-info fallback. - Days controls the recency filter used when generating the list.
 
+The warning control beside Plan opens **Autopilot Follow-ups**, a GBrain-backed
+ledger of detected issues, queued repairs, blocked work, approval requests,
+escalations, and verified resolutions. A completed repair job remains visible
+until a fresh detector pass confirms that the underlying condition disappeared.
+Acknowledging a finding records review without falsely resolving it.
+
 The chat panel stores the visible conversation in browser state for the current session. It does not create durable GBrain notes by itself; durable changes still go through explicit actions such as modifying markdown, adding relationships, tags, timeline events, or attachments.
 
 ## GBrain Integration

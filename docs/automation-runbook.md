@@ -544,6 +544,57 @@ Do not mark TODOs completed until all configured required targets report the exp
 
 For hosts where Memory Stargraph depends on Docker-backed GBrain Postgres and is exposed through Tailscale HTTPS, use [Memory Stargraph Docker Postgres and HTTPS Runbook](memory-stargraph-docker-postgres-https-runbook.md) before declaring the target down. In particular, check Docker Desktop startup, the existing Postgres container and volume, GBrain's HTTP LaunchAgent, Memory Stargraph's LaunchAgent, and the Tailscale Serve backend scheme in that order.
 
+## Autopilot Follow-Up Loop
+
+GBrain is the source of truth for Autopilot operational findings. Memory
+Stargraph is the review surface and must read the ledger through:
+
+```bash
+gbrain call autopilot_findings_list '{"limit":50,"offset":0}'
+gbrain call autopilot_findings_acknowledge '{"id":1}'
+```
+
+The lifecycle states are `open`, `queued`, `repairing`, `blocked`,
+`awaiting_approval`, `escalated`, and `resolved`. A stable fingerprint
+deduplicates repeated detector output. Authority determines routing:
+
+- `remediable`: link the finding to a Minion repair job.
+- `blocked`: preserve an owner-visible follow-up with the blocking evidence.
+- `human_only`: require explicit approval; never auto-apply the decision.
+
+A completed Minion job is not proof of resolution. The next fresh detector
+pass must no longer observe the condition. If a completed repair still fails
+its postcondition, retry once with a new idempotency key. If the second
+completed repair also fails, mark the finding `escalated`. Acknowledgement
+records human awareness but does not change the lifecycle state.
+
+Memory Stargraph exposes the same ledger at:
+
+```text
+GET  /api/autopilot-findings
+POST /api/autopilot-findings/<id>/acknowledge
+```
+
+The Follow-ups control lives beside the Autopilot plan control. Its badge,
+filters, evidence, owner, repair count, failed-check count, and acknowledgement
+state all come from GBrain. Do not recreate this state in Stargraph storage or
+route these operational findings through `take_proposals`.
+
+Deployment lesson from 2026-07-29: the remote host's live GBrain binary was a
+custom deployment snapshot containing resolver and Take Review operations that
+were absent from upstream. Build a new snapshot from the deployed source and
+layer the tested follow-up patch; do not replace it with plain upstream. After
+restarting Autopilot, verify the PID recorded in `~/.gbrain/autopilot.lock`.
+The current launcher checks lock age rather than PID liveness, so a dead PID
+with a fresh lock can delay restart for ten minutes. Confirm the PID is dead
+before aging the lock past the takeover threshold.
+
+Run retrospective: the main delay was discovering the custom deployment
+snapshot and waiting on Intel-host typechecking. The staged deployment test
+caught a missing `fts-language` dependency before activation. The improvement
+was implemented immediately by testing a non-live snapshot, preserving custom
+operations, and documenting the lock and compatibility checks here.
+
 ## Automation Host Ownership Switch
 
 Memory Stargraph recurring Codex automations may be installed on both Tony's local Mac and the `.85` host, but only one host may own the schedule at a time. The global holder flag lives in Memory Stargraph/GBrain:

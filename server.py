@@ -172,10 +172,11 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.170"
+UI_VERSION = "V1.0.171"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
+AUTOPILOT_FINDINGS_MAX_LIMIT = 200
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -210,6 +211,8 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "take-review-defer", "method": "POST", "endpoint": "/api/take-proposals/<id>/defer", "mutates_gbrain": True},
     {"action": "take-review-bulk", "method": "POST", "endpoint": "/api/take-proposals/bulk", "mutates_gbrain": True},
     {"action": "takes", "method": "GET", "endpoint": "/api/takes", "mutates_gbrain": False},
+    {"action": "autopilot-findings", "method": "GET", "endpoint": "/api/autopilot-findings", "mutates_gbrain": False},
+    {"action": "autopilot-finding-acknowledge", "method": "POST", "endpoint": "/api/autopilot-findings/<id>/acknowledge", "mutates_gbrain": True},
     {"action": "yoda-system-prompt", "method": "GET", "endpoint": "/api/yoda-system-prompt", "mutates_gbrain": False},
     {"action": "yoda-system-prompt-save", "method": "POST", "endpoint": "/api/yoda-system-prompt", "mutates_gbrain": False},
     {"action": "yoda-logs", "method": "GET", "endpoint": "/api/yoda-logs", "mutates_gbrain": False},
@@ -5386,6 +5389,35 @@ class GraphStore:
         normalized.setdefault("filters", payload)
         return normalized
 
+    def list_autopilot_findings(self, filters=None):
+        payload = dict(filters or {})
+        payload["limit"] = max(
+            1,
+            min(AUTOPILOT_FINDINGS_MAX_LIMIT, int(payload.get("limit") or 50)),
+        )
+        payload["offset"] = max(0, int(payload.get("offset") or 0))
+        if not payload.get("state"):
+            payload.pop("state", None)
+        result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
+        if not isinstance(result, dict):
+            return {"findings": [], "total": 0}
+        findings = result.get("findings")
+        return {
+            **result,
+            "findings": findings if isinstance(findings, list) else [],
+            "total": int(result.get("total") or 0),
+        }
+
+    def acknowledge_autopilot_finding(self, finding_id):
+        result = gbrain_call_tool(
+            "autopilot_findings_acknowledge",
+            {"id": int(finding_id)},
+            timeout=30,
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("GBrain returned an invalid autopilot finding")
+        return result
+
 
 STORE = GraphStore()
 
@@ -5817,6 +5849,36 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 return self.end_json({"ok": True, **data})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path in ("/api/autopilot-findings", "/api/hosting/autopilot-findings"):
+            query = parse_qs(parsed.query)
+            state = (query.get("state") or [""])[0].strip()
+            valid_states = {
+                "",
+                "open",
+                "queued",
+                "repairing",
+                "blocked",
+                "awaiting_approval",
+                "escalated",
+                "resolved",
+            }
+            if state not in valid_states:
+                return self.end_json({"error": "invalid finding state"}, status=HTTPStatus.BAD_REQUEST)
+            filters = {
+                "state": state,
+                "limit": parse_bounded_int(
+                    (query.get("limit") or ["50"])[0],
+                    50,
+                    1,
+                    AUTOPILOT_FINDINGS_MAX_LIMIT,
+                ),
+                "offset": parse_nonnegative_int((query.get("offset") or ["0"])[0], 0),
+            }
+            try:
+                data = STORE.list_autopilot_findings(filters)
+                return self.end_json({"ok": True, **data})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/search":
             query = (parse_qs(parsed.query).get("q") or [""])[0].strip()
             if len(query) < 2:
@@ -5984,6 +6046,18 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 return self.end_json(data)
             except ValueError as exc:
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        finding_ack_match = re.match(
+            r"^/api/(?:hosting/)?autopilot-findings/(\d+)/acknowledge$",
+            parsed.path,
+        )
+        if finding_ack_match:
+            finding_id = int(finding_ack_match.group(1))
+            try:
+                self.read_json_body()
+                finding = STORE.acknowledge_autopilot_finding(finding_id)
+                return self.end_json({"ok": True, "finding": finding})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/entity-create":

@@ -121,6 +121,29 @@ class FakeStore:
         ]
         return {"takes": takes}
 
+    def list_autopilot_findings(self, filters=None):
+        self.calls.append(("list_autopilot_findings", dict(filters or {})))
+        return {
+            "findings": [
+                {
+                    "id": 7,
+                    "check_name": "sync_freshness",
+                    "state": "blocked",
+                    "severity": "high",
+                    "rationale": "no repo configured",
+                }
+            ],
+            "total": 1,
+        }
+
+    def acknowledge_autopilot_finding(self, finding_id):
+        self.calls.append(("acknowledge_autopilot_finding", finding_id))
+        return {
+            "id": finding_id,
+            "state": "blocked",
+            "acknowledged_by": "memory-stargraph-ui",
+        }
+
 
 class SingleRowTakeStore(FakeStore):
     def list_takes(self, filters=None):
@@ -734,8 +757,47 @@ class ApiEndpointTests(unittest.TestCase):
                 "/api/take-proposals/<id>/defer",
                 "/api/take-proposals/bulk",
                 "/api/takes",
+                "/api/autopilot-findings",
+                "/api/autopilot-findings/<id>/acknowledge",
             }.issubset(endpoints)
         )
+
+    def test_autopilot_findings_endpoint_proxies_authoritative_gbrain_state(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/autopilot-findings?state=blocked&limit=500&offset=3")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["findings"][0]["state"], "blocked")
+        self.assertIn(
+            ("list_autopilot_findings", {"state": "blocked", "limit": 200, "offset": 3}),
+            fake_store.calls,
+        )
+
+    def test_hosting_autopilot_findings_alias_uses_same_proxy(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/hosting/autopilot-findings?limit=10")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn(
+            ("list_autopilot_findings", {"state": "", "limit": 10, "offset": 0}),
+            fake_store.calls,
+        )
+
+    def test_autopilot_finding_acknowledgement_does_not_claim_resolution(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post("/api/autopilot-findings/7/acknowledge", {})
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["finding"]["state"], "blocked")
+        self.assertEqual(data["finding"]["acknowledged_by"], "memory-stargraph-ui")
+        self.assertIn(("acknowledge_autopilot_finding", 7), fake_store.calls)
 
     def test_setup_diagnostics_is_redacted_and_actionable(self):
         fake_store = FakeStore()
