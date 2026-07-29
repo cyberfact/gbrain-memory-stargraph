@@ -568,6 +568,13 @@ its postcondition, retry once with a new idempotency key. If the second
 completed repair also fails, mark the finding `escalated`. Acknowledgement
 records human awareness but does not change the lifecycle state.
 
+Explicit remediations always use this durable path, regardless of how many
+recommendations a detector emits or their estimated duration. A full cycle is
+only the fallback when no targeted remediation exists. Do not reintroduce a
+`plan.length` or estimated-runtime cutoff before `reconcileAutopilotFindings`;
+that leaves visible findings permanently `open` while unrelated full-cycle
+jobs run without a verifiable finding-to-job link.
+
 Memory Stargraph exposes the same ledger at:
 
 ```text
@@ -583,7 +590,9 @@ route these operational findings through `take_proposals`.
 Deployment lesson from 2026-07-29: the remote host's live GBrain binary was a
 custom deployment snapshot containing resolver and Take Review operations that
 were absent from upstream. Build a new snapshot from the deployed source and
-layer the tested follow-up patch; do not replace it with plain upstream. After
+layer the tested follow-up diff; do not copy the upstream `autopilot.ts` over
+the custom file because its imports and helper modules may not exist in the
+snapshot. After
 restarting Autopilot, verify the PID recorded in `~/.gbrain/autopilot.lock`.
 The current launcher checks lock age rather than PID liveness, so a dead PID
 with a fresh lock can delay restart for ten minutes. Confirm the PID is dead
