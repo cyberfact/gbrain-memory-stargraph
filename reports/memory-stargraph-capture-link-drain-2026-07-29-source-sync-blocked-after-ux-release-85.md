@@ -8,8 +8,8 @@ report_slug: reports/memory-stargraph-capture-link-drain-2026-07-29-source-sync-
 automation_id: memory-stargraph-capture-link-drain
 invocation_id: capture-link-drain-20260729t095456-0700-85
 terminal_status: blocked
-product_owner_notification_status: pending_unacknowledged_delivery
-product_owner_notification_pending: true
+product_owner_notification_status: delivered_read_back
+product_owner_notification_pending: false
 product_owner_notification_thread_id: 019faa62-6058-7643-b9cc-a2627083af07
 ---
 
@@ -82,9 +82,14 @@ product_owner_notification_thread_id: 019faa62-6058-7643-b9cc-a2627083af07
   ],
   "approvals_needed": [],
   "requested_product_owner_follow_up": "Commit/push or otherwise clear current Product Owner/UX schedule edits and Curator report artifacts, then rerun Capture Link drain.",
-  "product_owner_notification_status": "pending_unacknowledged_delivery",
-  "product_owner_notification_pending": true,
+  "product_owner_notification_status": "delivered_read_back",
+  "product_owner_notification_pending": false,
   "product_owner_destination_task_id": "019faa62-6058-7643-b9cc-a2627083af07"
 }
 ```
 
+## Product Owner Delivery Evidence
+
+- Delivery attempt: `send_message_to_thread` to task `019faa62-6058-7643-b9cc-a2627083af07` returned that task id.
+- Readback evidence: Product Owner task readback showed the Curator compact payload as delegation item `item-392`, including invocation id `capture-link-drain-20260729t095456-0700-85`, Run/report slugs, blocked status, and zero capture/enrichment metrics.
+- Final delivery status: `delivered_read_back`; pending false.

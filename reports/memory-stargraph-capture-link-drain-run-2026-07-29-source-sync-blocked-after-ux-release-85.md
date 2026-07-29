@@ -8,8 +8,8 @@ mode: source_sync_preflight_blocked_after_ux_release
 status: blocked
 linked_goal: goals/memory-stargraph-continuous-learning-local-knowledge-os
 report_slug: reports/memory-stargraph-capture-link-drain-2026-07-29-source-sync-blocked-after-ux-release-85
-product_owner_notification_status: pending_unacknowledged_delivery
-product_owner_notification_pending: true
+product_owner_notification_status: delivered_read_back
+product_owner_notification_pending: false
 ---
 
 # Memory Stargraph Capture Link Drain source-sync blocked after UX release run - 2026-07-29 .85
@@ -40,8 +40,8 @@ This Run terminalized the Capture Link retry without mutating the capture backlo
 ## Product Owner Delivery
 
 - destination_task_id: 019faa62-6058-7643-b9cc-a2627083af07
-- notification_status: pending_unacknowledged_delivery
-- notification_pending: true
-- pending_reason: delivery/readback not yet attempted at local file creation time.
+- notification_status: delivered_read_back
+- notification_pending: false
+- delivery_attempt: `send_message_to_thread` returned destination task id `019faa62-6058-7643-b9cc-a2627083af07`.
+- readback_evidence: Product Owner task readback showed Curator payload as delegation item `item-392` with this invocation id, Run/report slugs, blocked status, and zero capture/enrichment metrics.
 - terminalized_at: 2026-07-29T09:54:56-07:00 America/Los_Angeles.
-
