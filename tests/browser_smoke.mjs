@@ -237,7 +237,7 @@ try {
   ) {
     throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  const expectedTourOrder = ["autopilotModeIcon", "tourPlanButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
+  const expectedTourOrder = ["autopilotModeIcon", "tourPlanButton", "autopilotFindingsButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
   if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || !initial.tourPresent || !initial.noPlannedFlightRailButton || expectedTourOrder.some((id, index) => initial.autopilotToolbarOrder[index] !== id) || !initial.toolbarAboveMap || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.modalAboveMapControls) {
     throw new Error(`Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control: ${JSON.stringify(initial)}`);
   }
