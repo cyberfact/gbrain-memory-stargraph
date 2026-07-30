@@ -43,6 +43,7 @@ class FakeCurl:
         self.failures = failures
         self.nodes: dict[str, str] = {}
         self.calls: list[list[str]] = []
+        self.healthy_hosts: set[str] = set()
 
     def __call__(
         self,
@@ -60,7 +61,13 @@ class FakeCurl:
         if self.failures:
             self.failures -= 1
             return subprocess.CompletedProcess(command, 7, "", "Failed to connect to 127.0.0.1 port 8788")
-        path = urlparse(command[-1]).path
+        parsed = urlparse(command[-1])
+        path = parsed.path
+        host = parsed.netloc
+        if path == "/api/health":
+            if host in self.healthy_hosts:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"ok": True}), "")
+            return subprocess.CompletedProcess(command, 7, "", f"Failed to connect to {host}")
         if "-X" not in command:
             slug = unquote(path.split("/api/entity-raw/", 1)[1])
             return subprocess.CompletedProcess(
@@ -89,19 +96,62 @@ class FakeCurl:
 
 class WorkerPersistenceTests(unittest.TestCase):
     def test_route_prefers_configured_dashboard_route_over_loopback(self):
+        fake = FakeCurl()
+        fake.healthy_hosts.add("memory-stargraph.example.test")
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "deployment-targets.env"
             config.write_text(
-                "MEMORY_STARGRAPH_LOCAL_URL='https://memory-stargraph.example.test'\n"
-                "MEMORY_STARGRAPH_LOCAL_CURL_FLAGS='-k --connect-timeout 5'\n",
+                "MEMORY_STARGRAPH_DASHBOARD_URL='https://memory-stargraph.example.test'\n"
+                "MEMORY_STARGRAPH_DASHBOARD_CURL_FLAGS='--connect-timeout 5'\n"
+                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n"
+                "MEMORY_STARGRAPH_LOCAL_CURL_FLAGS='-k'\n",
                 encoding="utf-8",
             )
 
-            route = persistence.resolve_worker_route(config)
+            with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
+                route = persistence.resolve_worker_route(config)
 
         self.assertEqual(route.base_url, "https://memory-stargraph.example.test")
-        self.assertEqual(route.curl_flags, ("-k", "--connect-timeout", "5"))
+        self.assertEqual(route.curl_flags, ("--connect-timeout", "5"))
+        self.assertTrue(route.source.endswith(":MEMORY_STARGRAPH_DASHBOARD_URL"))
         self.assertNotEqual(route.base_url, persistence.DEFAULT_WORKER_API_BASE_URL)
+
+    def test_route_probe_uses_dashboard_when_loopback_is_refused(self):
+        fake = FakeCurl()
+        fake.healthy_hosts.add("dashboard.example.test")
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "deployment-targets.env"
+            config.write_text(
+                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n"
+                "MEMORY_STARGRAPH_LOCAL_CURL_FLAGS='-k'\n"
+                "MEMORY_STARGRAPH_DASHBOARD_URL='https://dashboard.example.test'\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
+                route = persistence.resolve_worker_route(config)
+                fake.nodes["runs/test-run"] = RUN_MARKDOWN
+                readback = persistence.read_raw("runs/test-run", route=route)
+
+        self.assertEqual(readback, RUN_MARKDOWN)
+        flattened = [" ".join(call) for call in fake.calls]
+        self.assertTrue(any("https://dashboard.example.test/api/health" in call for call in flattened))
+        self.assertFalse(any("https://127.0.0.1:8788/api/health" in call for call in flattened))
+        self.assertTrue(all("dashboard.example.test" in call[-1] for call in fake.calls))
+
+    def test_route_fails_closed_when_configured_dashboard_is_unavailable(self):
+        fake = FakeCurl()
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "deployment-targets.env"
+            config.write_text(
+                "MEMORY_STARGRAPH_DASHBOARD_URL='https://dashboard.example.test'\n"
+                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
+                with self.assertRaisesRegex(persistence.WorkerPersistenceError, "refusing loopback fallback"):
+                    persistence.resolve_worker_route(config)
 
     def test_save_retries_loopback_refusal_and_verifies_once_by_slug(self):
         fake = FakeCurl(failures=1)

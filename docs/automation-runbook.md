@@ -171,14 +171,17 @@ readback has no standalone `active` tag, no active title/body marker, and
 semantic fields such as `ux_lease` and `active_change` are false.
 
 Recurring worker Run/report persistence uses
-`scripts/automation/worker_persistence.py`. The helper resolves the configured
-dashboard-managed `.85` route from the local deployment config before the
-loopback default, performs bounded retries, saves raw entities through
-`/api/entity-save/<slug>`, verifies with `/api/entity-raw/<slug>`, and releases
-or changes page tags through `/api/entity-tags/<slug>`. Direct `gbrain` is only
-an explicit host fallback when `MEMORY_STARGRAPH_DIRECT_GBRAIN_FALLBACK=1`, so
-restricted-worker loopback refusal does not force workers onto local
-PostgreSQL/GBrain paths.
+`scripts/automation/worker_persistence.py`. The helper probes configured worker
+API candidates from the local deployment config, prefers a healthy non-loopback
+dashboard route such as `MEMORY_STARGRAPH_DASHBOARD_URL` before
+`MEMORY_STARGRAPH_LOCAL_URL` or the default loopback route, performs bounded
+retries, saves raw entities through `/api/entity-save/<slug>`, verifies with
+`/api/entity-raw/<slug>`, and releases or changes page tags through
+`/api/entity-tags/<slug>`. If a non-loopback dashboard route is configured but
+unavailable, the helper fails closed instead of silently falling back to
+loopback. Direct `gbrain` is only an explicit host fallback when
+`MEMORY_STARGRAPH_DIRECT_GBRAIN_FALLBACK=1`, so restricted-worker loopback
+refusal does not force workers onto local PostgreSQL/GBrain paths.
 
 ## SRE reliability and resilience
 

@@ -66,8 +66,55 @@ def default_config_path() -> Path:
     return codex_home / "automations" / "memory-stargraph-wish-to-reallity" / "deployment-targets.env"
 
 
+def _is_loopback_url(url: str) -> bool:
+    return bool(re.search(r"^https?://(127(?:\.\d+){3}|localhost)(?::|/|$)", url, flags=re.IGNORECASE))
+
+
+def _candidate_routes(config: dict[str, str], config_source: str) -> list[WorkerRoute]:
+    routes: list[WorkerRoute] = []
+    dashboard_url = config.get("MEMORY_STARGRAPH_DASHBOARD_URL", "").strip()
+    if dashboard_url:
+        routes.append(
+            WorkerRoute(
+                dashboard_url.rstrip("/"),
+                tuple(shlex.split(config.get("MEMORY_STARGRAPH_DASHBOARD_CURL_FLAGS", ""))),
+                f"{config_source}:MEMORY_STARGRAPH_DASHBOARD_URL",
+            )
+        )
+    local_url = config.get("MEMORY_STARGRAPH_LOCAL_URL", "").strip()
+    if local_url:
+        routes.append(
+            WorkerRoute(
+                local_url.rstrip("/"),
+                tuple(shlex.split(config.get("MEMORY_STARGRAPH_LOCAL_CURL_FLAGS", ""))),
+                f"{config_source}:MEMORY_STARGRAPH_LOCAL_URL",
+            )
+        )
+    routes.append(WorkerRoute(DEFAULT_WORKER_API_BASE_URL, (), "default_loopback"))
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    deduped: list[WorkerRoute] = []
+    for route in routes:
+        identity = (route.base_url, route.curl_flags)
+        if identity not in seen:
+            seen.add(identity)
+            deduped.append(route)
+    return deduped
+
+
+def _route_health_ok(route: WorkerRoute, timeout: int = 8) -> bool:
+    result = run_curl(route, ["--max-time", str(timeout), f"{route.base_url}/api/health"], timeout=timeout + 5)
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and payload.get("ok") is True
+
+
 def resolve_worker_route(config_path: Path | None = None) -> WorkerRoute:
-    config = _parse_env_file(config_path or default_config_path())
+    path = config_path or default_config_path()
+    config = _parse_env_file(path)
     env_url = os.environ.get("MEMORY_STARGRAPH_WORKER_API_URL", "").strip()
     if env_url:
         return WorkerRoute(
@@ -75,14 +122,20 @@ def resolve_worker_route(config_path: Path | None = None) -> WorkerRoute:
             tuple(shlex.split(os.environ.get("MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS", ""))),
             "MEMORY_STARGRAPH_WORKER_API_URL",
         )
-    config_url = config.get("MEMORY_STARGRAPH_LOCAL_URL", "").strip()
-    if config_url:
-        return WorkerRoute(
-            config_url.rstrip("/"),
-            tuple(shlex.split(config.get("MEMORY_STARGRAPH_LOCAL_CURL_FLAGS", ""))),
-            str(config_path or default_config_path()),
+    candidates = _candidate_routes(config, str(path))
+    non_loopback = [route for route in candidates if not _is_loopback_url(route.base_url)]
+    loopback = [route for route in candidates if _is_loopback_url(route.base_url)]
+    for route in [*non_loopback, *loopback]:
+        if _route_health_ok(route):
+            return route
+    if non_loopback:
+        raise WorkerPersistenceError(
+            "configured non-loopback worker API routes were unavailable; refusing loopback fallback"
         )
-    return WorkerRoute(DEFAULT_WORKER_API_BASE_URL, (), "default_loopback")
+    for route in loopback:
+        if _route_health_ok(route):
+            return route
+    raise WorkerPersistenceError("no healthy worker API route available")
 
 
 def _completed_error(result: subprocess.CompletedProcess[str]) -> str:
