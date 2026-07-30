@@ -116,6 +116,28 @@ class FakeGBrain:
         return subprocess.CompletedProcess(args, 2, "", f"unsupported command: {command}")
 
 
+class WorkerApiRouteTests(unittest.TestCase):
+    def test_worker_api_defaults_to_configured_non_loopback_route(self):
+        config_path = Path(self._testMethodName)
+        config_path.write_text(
+            "MEMORY_STARGRAPH_DASHBOARD_URL='https://100.100.126.85:8788'\n"
+            "MEMORY_STARGRAPH_DASHBOARD_CURL_FLAGS='-k --connect-timeout 5'\n"
+            "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n",
+            encoding="utf-8",
+        )
+        try:
+            with (
+                mock.patch.dict(capture.os.environ, {}, clear=False),
+                mock.patch.object(capture, "default_config_path", return_value=config_path),
+            ):
+                capture.os.environ.pop("MEMORY_STARGRAPH_WORKER_API_URL", None)
+                capture.os.environ.pop("MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS", None)
+                self.assertEqual(capture.worker_api_base_url(), "https://100.100.126.85:8788")
+                self.assertEqual(capture.worker_api_curl_flags(), ["-k", "--connect-timeout", "5"])
+        finally:
+            config_path.unlink(missing_ok=True)
+
+
 class FakeWorkerApi:
     def __init__(self, backend: FakeGBrain):
         self.backend = backend
@@ -189,6 +211,20 @@ def direct_gbrain_refused(args, input_text=None, timeout=180):
 
 
 class CaptureBacklogTests(unittest.TestCase):
+    def setUp(self):
+        self.worker_api_env = mock.patch.dict(
+            capture.os.environ,
+            {
+                "MEMORY_STARGRAPH_WORKER_API_URL": "http://127.0.0.1:9",
+                "MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS": "",
+            },
+            clear=False,
+        )
+        self.worker_api_env.start()
+
+    def tearDown(self):
+        self.worker_api_env.stop()
+
     def test_root_has_exact_schema_and_pacific_timestamp(self):
         now = dt.datetime(2026, 7, 15, 12, 0, tzinfo=dt.timezone.utc)
         root = capture.build_root(now)

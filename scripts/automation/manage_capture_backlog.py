@@ -27,6 +27,7 @@ from scripts.automation.backlog_compaction import (
     render_table,
     replace_root_table,
 )
+from scripts.automation.worker_persistence import default_config_path, route_records
 
 
 ROOT_SLUG = "notes/memory-starmap-capture-list"
@@ -230,11 +231,25 @@ def run_gbrain(
 
 
 def worker_api_base_url() -> str:
-    return os.environ.get("MEMORY_STARGRAPH_WORKER_API_URL", DEFAULT_WORKER_API_BASE_URL).rstrip("/")
+    env_url = os.environ.get("MEMORY_STARGRAPH_WORKER_API_URL")
+    if env_url:
+        return env_url.rstrip("/")
+    records = route_records(default_config_path())
+    if records:
+        return str(records[0]["base_url"]).rstrip("/")
+    return DEFAULT_WORKER_API_BASE_URL
 
 
 def worker_api_curl_flags() -> list[str]:
-    return shlex.split(os.environ.get("MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS", ""))
+    env_flags = os.environ.get("MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS")
+    if env_flags is not None:
+        return shlex.split(env_flags)
+    records = route_records(default_config_path())
+    if records:
+        flags = records[0].get("curl_flags")
+        if isinstance(flags, list):
+            return [str(flag) for flag in flags]
+    return []
 
 
 def run_curl(

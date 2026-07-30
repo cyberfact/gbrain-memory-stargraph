@@ -1,10 +1,11 @@
 import json
+import os
+import stat
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
-from unittest import mock
-from urllib.parse import unquote, urlparse
 
 from scripts.automation import worker_persistence as persistence
 
@@ -24,80 +25,8 @@ active_change: false
 """
 
 
-TERMINAL_MARKDOWN = """---
-type: run
-title: Worker Persistence Acceptance
-tags:
-  - capture-link
-  - completed
-status: completed
-active_change: false
----
-
-# Worker Persistence Acceptance
-"""
-
-
-class FakeCurl:
-    def __init__(self, failures: int = 0):
-        self.failures = failures
-        self.nodes: dict[str, str] = {}
-        self.calls: list[list[str]] = []
-        self.healthy_hosts: set[str] = set()
-
-    def __call__(
-        self,
-        command,
-        input=None,
-        text=None,
-        capture_output=None,
-        timeout=None,
-        check=None,
-    ):
-        del text, capture_output, timeout, check
-        self.calls.append(list(command))
-        if command[0] == "gbrain":
-            raise AssertionError("direct gbrain fallback should not be used")
-        if self.failures:
-            self.failures -= 1
-            return subprocess.CompletedProcess(command, 7, "", "Failed to connect to 127.0.0.1 port 8788")
-        parsed = urlparse(command[-1])
-        path = parsed.path
-        host = parsed.netloc
-        if path == "/api/health":
-            if host in self.healthy_hosts:
-                return subprocess.CompletedProcess(command, 0, json.dumps({"ok": True}), "")
-            return subprocess.CompletedProcess(command, 7, "", f"Failed to connect to {host}")
-        if "-X" not in command:
-            slug = unquote(path.split("/api/entity-raw/", 1)[1])
-            return subprocess.CompletedProcess(
-                command,
-                0,
-                json.dumps({"ok": True, "slug": slug, "content": self.nodes[slug]}),
-                "",
-            )
-        payload = json.loads(input or "{}")
-        if path.startswith("/api/entity-save/"):
-            slug = unquote(path.split("/api/entity-save/", 1)[1])
-            self.nodes[slug] = str(payload.get("content") or "")
-            return subprocess.CompletedProcess(command, 0, json.dumps({"ok": True, "slug": slug}), "")
-        if path.startswith("/api/entity-tags/"):
-            slug = unquote(path.split("/api/entity-tags/", 1)[1])
-            content = self.nodes[slug]
-            for tag in payload.get("remove", []):
-                content = content.replace(f"  - {tag}\n", "")
-            insertion = "".join(f"  - {tag}\n" for tag in payload.get("add", []))
-            if insertion and "tags:\n" in content:
-                content = content.replace("tags:\n", "tags:\n" + insertion, 1)
-            self.nodes[slug] = content
-            return subprocess.CompletedProcess(command, 0, json.dumps({"ok": True, "slug": slug}), "")
-        return subprocess.CompletedProcess(command, 22, "", f"unsupported route {path}")
-
-
 class WorkerPersistenceTests(unittest.TestCase):
-    def test_route_prefers_configured_dashboard_route_over_loopback(self):
-        fake = FakeCurl()
-        fake.healthy_hosts.add("memory-stargraph.example.test")
+    def test_route_candidates_prefer_configured_dashboard_route_over_loopback(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "deployment-targets.env"
             config.write_text(
@@ -108,81 +37,38 @@ class WorkerPersistenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
-                route = persistence.resolve_worker_route(config)
+            records = persistence.route_records(config)
 
-        self.assertEqual(route.base_url, "https://memory-stargraph.example.test")
-        self.assertEqual(route.curl_flags, ("--connect-timeout", "5"))
-        self.assertTrue(route.source.endswith(":MEMORY_STARGRAPH_DASHBOARD_URL"))
-        self.assertNotEqual(route.base_url, persistence.DEFAULT_WORKER_API_BASE_URL)
+        self.assertEqual(records[0]["base_url"], "https://memory-stargraph.example.test")
+        self.assertEqual(records[0]["curl_flags"], ["--connect-timeout", "5"])
+        self.assertTrue(str(records[0]["source"]).endswith(":MEMORY_STARGRAPH_DASHBOARD_URL"))
+        self.assertFalse(records[0]["loopback"])
+        self.assertTrue(records[1]["loopback"])
 
-    def test_route_probe_uses_dashboard_when_loopback_is_refused(self):
-        fake = FakeCurl()
-        fake.healthy_hosts.add("dashboard.example.test")
+    def test_save_payload_safely_preserves_markdown_content(self):
         with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "deployment-targets.env"
-            config.write_text(
-                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n"
-                "MEMORY_STARGRAPH_LOCAL_CURL_FLAGS='-k'\n"
-                "MEMORY_STARGRAPH_DASHBOARD_URL='https://dashboard.example.test'\n",
-                encoding="utf-8",
-            )
+            source = Path(tmp) / "run.md"
+            source.write_text('---\ntitle: "Quoted"\n---\n\n# Body\n{"x": "$HOME"}\n', encoding="utf-8")
 
-            with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
-                route = persistence.resolve_worker_route(config)
-                fake.nodes["runs/test-run"] = RUN_MARKDOWN
-                readback = persistence.read_raw("runs/test-run", route=route)
+            payload = persistence.save_payload(source)
 
-        self.assertEqual(readback, RUN_MARKDOWN)
-        flattened = [" ".join(call) for call in fake.calls]
-        self.assertTrue(any("https://dashboard.example.test/api/health" in call for call in flattened))
-        self.assertFalse(any("https://127.0.0.1:8788/api/health" in call for call in flattened))
-        self.assertTrue(all("dashboard.example.test" in call[-1] for call in fake.calls))
+        self.assertEqual(payload["content"], '---\ntitle: "Quoted"\n---\n\n# Body\n{"x": "$HOME"}\n')
+        self.assertEqual(json.loads(json.dumps(payload))["content"], payload["content"])
 
-    def test_route_fails_closed_when_configured_dashboard_is_unavailable(self):
-        fake = FakeCurl()
+    def test_tag_payload_requires_a_real_mutation(self):
+        with self.assertRaisesRegex(persistence.WorkerPersistenceError, "at least one"):
+            persistence.tag_payload([], [])
+
+    def test_verify_tags_detects_release(self):
         with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "deployment-targets.env"
-            config.write_text(
-                "MEMORY_STARGRAPH_DASHBOARD_URL='https://dashboard.example.test'\n"
-                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n",
-                encoding="utf-8",
-            )
+            raw = Path(tmp) / "raw.json"
+            raw.write_text(json.dumps({"content": RUN_MARKDOWN.replace("  - active\n", "")}), encoding="utf-8")
 
-            with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
-                with self.assertRaisesRegex(persistence.WorkerPersistenceError, "refusing loopback fallback"):
-                    persistence.resolve_worker_route(config)
-
-    def test_save_retries_loopback_refusal_and_verifies_once_by_slug(self):
-        fake = FakeCurl(failures=1)
-        route = persistence.WorkerRoute("https://memory-stargraph.example.test", ("-k",), "test")
-
-        with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
-            result = persistence.save_raw("runs/test-run", RUN_MARKDOWN, route=route, retries=3)
+            result = persistence.verify_tags_payload(raw, add=["capture-link"], remove=["active"])
 
         self.assertTrue(result["ok"])
-        self.assertEqual(fake.nodes["runs/test-run"], RUN_MARKDOWN)
-        save_calls = [call for call in fake.calls if "/api/entity-save/runs%2Ftest-run" in call[-1]]
-        self.assertEqual(len(save_calls), 2)
-        self.assertTrue(all("https://memory-stargraph.example.test" in call[-1] for call in fake.calls))
-
-    def test_tag_mutation_releases_active_and_implementing_with_raw_readback(self):
-        fake = FakeCurl()
-        fake.nodes["runs/test-run"] = RUN_MARKDOWN
-        route = persistence.WorkerRoute("https://memory-stargraph.example.test", (), "test")
-
-        with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
-            result = persistence.mutate_tags(
-                "runs/test-run",
-                add=["completed"],
-                remove=["active", "implementing"],
-                route=route,
-            )
-
-        self.assertTrue(result["ok"])
-        self.assertIn("completed", result["tags"])
+        self.assertIn("capture-link", result["tags"])
         self.assertNotIn("active", result["tags"])
-        self.assertNotIn("implementing", result["tags"])
 
     def test_save_accepts_canonicalized_frontmatter_order(self):
         expected = """---
@@ -289,42 +175,14 @@ tags:
         self.assertTrue(persistence._raw_readback_matches(expected, actual))
 
     def test_save_rejects_true_scalar_mismatch(self):
-        expected = """---
-type: run
-status: completed
----
-
-# Scalar Run
-"""
-        actual = """---
-type: run
-status: failed
----
-
-# Scalar Run
-"""
+        expected = "---\ntype: run\nstatus: completed\n---\n\n# Scalar Run\n"
+        actual = "---\ntype: run\nstatus: failed\n---\n\n# Scalar Run\n"
 
         self.assertFalse(persistence._raw_readback_matches(expected, actual))
 
     def test_save_rejects_true_body_mismatch(self):
-        expected = """---
-type: run
-status: completed
----
-
-# Body Run
-
-Expected body.
-"""
-        actual = """---
-type: run
-status: completed
----
-
-# Body Run
-
-Different body.
-"""
+        expected = "---\ntype: run\nstatus: completed\n---\n\n# Body Run\n\nExpected body.\n"
+        actual = "---\ntype: run\nstatus: completed\n---\n\n# Body Run\n\nDifferent body.\n"
 
         self.assertFalse(persistence._raw_readback_matches(expected, actual))
 
@@ -336,14 +194,116 @@ Different body.
         self.assertTrue(persistence._raw_readback_matches(expected, actual))
         self.assertFalse(persistence._raw_readback_matches(expected, extra))
 
-    def test_direct_gbrain_is_disabled_by_default_when_worker_api_fails(self):
-        fake = FakeCurl(failures=3)
-        route = persistence.WorkerRoute("https://memory-stargraph.example.test", (), "test")
+    def test_shell_entrypoint_uses_top_level_curl_and_preserves_payload(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config = tmp_path / "deployment-targets.env"
+            config.write_text(
+                "MEMORY_STARGRAPH_DASHBOARD_URL='https://dashboard.example.test'\n"
+                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n",
+                encoding="utf-8",
+            )
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            log = tmp_path / "curl.log"
+            store = tmp_path / "store.json"
+            store.write_text("{}", encoding="utf-8")
+            curl = fake_bin / "curl"
+            curl.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env python3
+                    import json, pathlib, sys, urllib.parse
+                    log = pathlib.Path({str(log)!r})
+                    store = pathlib.Path({str(store)!r})
+                    log.write_text(log.read_text() + " ".join(sys.argv[1:]) + "\\n" if log.exists() else " ".join(sys.argv[1:]) + "\\n")
+                    args = sys.argv[1:]
+                    output = None
+                    if "-o" in args:
+                        output = pathlib.Path(args[args.index("-o") + 1])
+                    url = next(arg for arg in args if arg.startswith("http://") or arg.startswith("https://"))
+                    data = json.loads(store.read_text())
+                    def write(payload):
+                        text = json.dumps(payload)
+                        if output:
+                            output.write_text(text)
+                        else:
+                            print(text)
+                    if url.endswith("/api/health"):
+                        if "dashboard.example.test" not in url:
+                            sys.exit(7)
+                        write({{"ok": True}})
+                    elif "/api/entity-save/" in url:
+                        payload_file = args[args.index("-d") + 1][1:]
+                        slug = urllib.parse.unquote(url.split("/api/entity-save/", 1)[1])
+                        payload = json.loads(pathlib.Path(payload_file).read_text())
+                        data[slug] = payload["content"]
+                        store.write_text(json.dumps(data))
+                        write({{"ok": True, "slug": slug}})
+                    elif "/api/entity-raw/" in url:
+                        slug = urllib.parse.unquote(url.split("/api/entity-raw/", 1)[1])
+                        write({{"ok": True, "slug": slug, "content": data[slug]}})
+                    elif "/api/entity-tags/" in url:
+                        payload_file = args[args.index("-d") + 1][1:]
+                        slug = urllib.parse.unquote(url.split("/api/entity-tags/", 1)[1])
+                        payload = json.loads(pathlib.Path(payload_file).read_text())
+                        content = data[slug]
+                        for tag in payload.get("remove", []):
+                            content = content.replace(f"  - {{tag}}\\n", "")
+                        if payload.get("add") and "tags:\\n" in content:
+                            content = content.replace("tags:\\n", "tags:\\n" + "".join(f"  - {{tag}}\\n" for tag in payload["add"]), 1)
+                        data[slug] = content
+                        store.write_text(json.dumps(data))
+                        write({{"ok": True, "slug": slug}})
+                    else:
+                        sys.exit(22)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
+            content = tmp_path / "run.md"
+            content.write_text(RUN_MARKDOWN, encoding="utf-8")
+            env = {
+                **os.environ,
+                "PATH": f"{fake_bin}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                "MEMORY_STARGRAPH_AUTOMATION_CONFIG": str(config),
+                "MEMORY_STARGRAPH_WORKER_API_RETRIES": "1",
+            }
 
-        with mock.patch.dict("os.environ", {}, clear=True):
-            with mock.patch("scripts.automation.worker_persistence.subprocess.run", side_effect=fake):
-                with self.assertRaises(persistence.WorkerPersistenceError):
-                    persistence.save_raw("runs/test-run", TERMINAL_MARKDOWN, route=route, retries=2)
+            save = subprocess.run(
+                ["bash", "scripts/automation/worker_persistence.sh", "save", "runs/test-run", "--file", str(content), "--json"],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            tags = subprocess.run(
+                [
+                    "bash",
+                    "scripts/automation/worker_persistence.sh",
+                    "tags",
+                    "runs/test-run",
+                    "--remove",
+                    "active",
+                    "--add",
+                    "completed",
+                    "--json",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(save.returncode, 0, save.stderr)
+            self.assertEqual(tags.returncode, 0, tags.stderr)
+            self.assertTrue(json.loads(save.stdout)["ok"])
+            self.assertIn("dashboard.example.test", log.read_text())
+            self.assertNotIn("127.0.0.1:8788/api/health", log.read_text())
 
 
 if __name__ == "__main__":

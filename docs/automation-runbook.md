@@ -171,17 +171,20 @@ readback has no standalone `active` tag, no active title/body marker, and
 semantic fields such as `ux_lease` and `active_change` are false.
 
 Recurring worker Run/report persistence uses
-`scripts/automation/worker_persistence.py`. The helper probes configured worker
-API candidates from the local deployment config, prefers a healthy non-loopback
-dashboard route such as `MEMORY_STARGRAPH_DASHBOARD_URL` before
-`MEMORY_STARGRAPH_LOCAL_URL` or the default loopback route, performs bounded
-retries, saves raw entities through `/api/entity-save/<slug>`, verifies with
-`/api/entity-raw/<slug>`, and releases or changes page tags through
-`/api/entity-tags/<slug>`. If a non-loopback dashboard route is configured but
-unavailable, the helper fails closed instead of silently falling back to
-loopback. Direct `gbrain` is only an explicit host fallback when
-`MEMORY_STARGRAPH_DIRECT_GBRAIN_FALLBACK=1`, so restricted-worker loopback
-refusal does not force workers onto local PostgreSQL/GBrain paths.
+`scripts/automation/worker_persistence.sh`. The shell entrypoint probes
+configured worker API candidates from the local deployment config, prefers a
+healthy non-loopback dashboard route such as
+`MEMORY_STARGRAPH_DASHBOARD_URL` before `MEMORY_STARGRAPH_LOCAL_URL` or the
+default loopback route, performs bounded retries, saves raw entities through
+`/api/entity-save/<slug>`, verifies with `/api/entity-raw/<slug>`, and releases
+or changes page tags through `/api/entity-tags/<slug>`. All network transport
+is top-level shell `curl`; `scripts/automation/worker_persistence.py` is
+offline-only for route/config parsing, safe JSON payload construction, slug
+encoding, raw content extraction, and semantic YAML readback verification. If a
+non-loopback dashboard route is configured but unavailable, the shell
+entrypoint fails closed instead of silently falling back to loopback. Do not use
+Python sockets, Python-spawned curl, direct `gbrain`, loopback, or PostgreSQL
+fallback for recurring-worker persistence transport.
 
 Raw save readback compares frontmatter semantically for the YAML subset used by
 worker entities: top-level scalars, folded or literal block scalars, simple
