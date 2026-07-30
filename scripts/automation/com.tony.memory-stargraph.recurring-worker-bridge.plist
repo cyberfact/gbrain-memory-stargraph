@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tony.memory-stargraph.recurring-worker-bridge</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/toddy/memory-stargraph</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/toddy/.bun/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED</key>
+    <string>1</string>
+    <key>MEMORY_STARGRAPH_RECURRING_BRIDGE_DIR</key>
+    <string>/Users/toddy/memory-stargraph/var/recurring-worker-bridge</string>
+    <key>MEMORY_STARGRAPH_RECURRING_BRIDGE_API_URL</key>
+    <string>https://127.0.0.1:8788</string>
+    <key>MEMORY_STARGRAPH_RECURRING_BRIDGE_CURL_FLAGS</key>
+    <string>-sk</string>
+    <key>MEMORY_STARGRAPH_RECURRING_BRIDGE_HOST_ROLE</key>
+    <string>.85-authoritative</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/toddy/memory-stargraph/scripts/automation/recurring_worker_bridge.py</string>
+    <string>run-loop</string>
+    <string>--poll-seconds</string>
+    <string>5</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/toddy/memory-stargraph/var/recurring-worker-bridge/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/toddy/memory-stargraph/var/recurring-worker-bridge/logs/launchd.err.log</string>
+</dict>
+</plist>

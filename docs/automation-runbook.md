@@ -203,8 +203,11 @@ runner ownership, and `processed/total` progress where known. Polling remains
 local-file only for up to 10 minutes while daemon heartbeat is fresh and
 ownership is stable; fail early only on terminal failure, stale heartbeat,
 ownership change, or hard deadline. Only `.85` enables the bridge with
-`MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED=1`; `.102` receives code but keeps
-Learning/SRE evidence and mutation runner operations disabled by default.
+`MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED=1`, normally through launchd label
+`com.tony.memory-stargraph.recurring-worker-bridge` using the tracked
+`scripts/automation/com.tony.memory-stargraph.recurring-worker-bridge.plist`.
+`.102` receives code but keeps Learning/SRE evidence and mutation runner
+operations disabled by default.
 
 Daily Learning evidence includes service health, bounded raw Goal/product/TODO
 and runbook context, a 10-question evaluator evidence slot with

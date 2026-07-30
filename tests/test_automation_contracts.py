@@ -165,6 +165,7 @@ class AutomationContractTests(unittest.TestCase):
             "scripts/automation/gbrain_worker_api.py",
             "scripts/automation/source_sync_preflight.py",
             "scripts/automation/recurring_worker_bridge.py",
+            "scripts/automation/com.tony.memory-stargraph.recurring-worker-bridge.plist",
             "tests/test_yoda_gap_evaluator.py",
             "tests/test_todo_backlog_compaction.py",
             "tests/test_source_sync_preflight.py",
@@ -883,7 +884,8 @@ class AutomationContractTests(unittest.TestCase):
             "phase heartbeats",
             "Poll for up to 10 minutes",
             "MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED=1",
-            "`.102` receives code but keeps\nLearning/SRE evidence and mutation runner operations disabled by default",
+            "com.tony.memory-stargraph.recurring-worker-bridge",
+            "`.102` receives code but keeps Learning/SRE evidence and mutation runner\noperations disabled by default",
             "no arbitrary command execution",
             "raw database\ncoordinates",
         ):

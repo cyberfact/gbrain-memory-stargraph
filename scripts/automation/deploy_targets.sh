@@ -45,6 +45,7 @@ tracked_files=(
   scripts/automation/capture_link_host_runner.py
   scripts/automation/recurring_worker_bridge.py
   scripts/automation/com.tony.memory-stargraph.capture-link-runner.plist
+  scripts/automation/com.tony.memory-stargraph.recurring-worker-bridge.plist
   scripts/automation/manage_capture_backlog.py
   scripts/automation/source_sync_preflight.py
   scripts/automation/worker_persistence.py
