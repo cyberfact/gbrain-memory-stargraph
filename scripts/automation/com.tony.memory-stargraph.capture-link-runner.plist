@@ -8,6 +8,8 @@
   <string>/Users/toddy/memory-stargraph</string>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>PATH</key>
+    <string>/Users/toddy/.bun/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED</key>
     <string>1</string>
     <key>MEMORY_STARGRAPH_CAPTURE_RUNNER_DIR</key>
