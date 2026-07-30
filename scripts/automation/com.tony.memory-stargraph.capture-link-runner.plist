@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tony.memory-stargraph.capture-link-runner</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/toddy/memory-stargraph</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED</key>
+    <string>1</string>
+    <key>MEMORY_STARGRAPH_CAPTURE_RUNNER_DIR</key>
+    <string>/Users/toddy/memory-stargraph/var/capture-link-runner</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+        <string>/usr/bin/python3</string>
+    <string>/Users/toddy/memory-stargraph/scripts/automation/capture_link_host_runner.py</string>
+    <string>run-loop</string>
+    <string>--poll-seconds</string>
+    <string>5</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/toddy/memory-stargraph/var/capture-link-runner/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/toddy/memory-stargraph/var/capture-link-runner/logs/launchd.err.log</string>
+</dict>
+</plist>

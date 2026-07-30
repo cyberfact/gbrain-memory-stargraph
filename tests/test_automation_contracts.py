@@ -727,28 +727,31 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("manual", prompt.lower())
         self.assertIn("there is no fixed cutoff", prompt.lower())
 
-    def test_capture_worker_freezes_and_drains_every_selected_item(self):
+    def test_capture_worker_uses_host_spool_instead_of_task_local_network(self):
         prompt = (
             ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
         ).read_text()
-        self.assertIn("first authoritative snapshot", prompt)
-        self.assertIn("planned` to `capturing", prompt)
-        self.assertIn("every frozen item", prompt)
-        self.assertIn("completed` or `failed", prompt)
-        self.assertIn("created after the frozen snapshot", prompt)
+        self.assertIn("host-managed spool runner", prompt)
+        self.assertIn("capture_link_host_runner.py submit", prompt)
+        self.assertIn("capture_link_host_runner.py status", prompt)
+        self.assertIn("offline local-file operations only", prompt)
+        self.assertIn("Do not use task-local curl", prompt)
+        self.assertIn("The host runner performs compaction and `snapshot` exactly once", prompt)
+        self.assertIn("Treat the terminal result file as authoritative", prompt)
+        self.assertIn("Do not perform capture, enrichment, GBrain writes", prompt)
 
-    def test_capture_worker_routes_to_most_specific_local_skill_and_reuses_media(self):
+    def test_capture_worker_reports_host_runner_terminal_result_without_fallback(self):
         prompt = (
             ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
         ).read_text()
-        self.assertIn("~/.codex/skills/<skill>/SKILL.md", prompt)
-        self.assertIn("~/.openclaw/skills/<skill>/SKILL.md", prompt)
-        self.assertIn("gbrain-capture-link", prompt)
-        self.assertIn("gbrain-pdf-capture", prompt)
-        self.assertIn("gb-capture-linkedin", prompt)
-        self.assertIn("must not upload or copy the bytes again", prompt)
+        self.assertIn("local terminal result file", prompt)
+        self.assertIn("snapshot evidence", prompt)
+        self.assertIn("final compaction evidence", prompt)
+        self.assertIn("lifecycle tag evidence", prompt)
+        self.assertIn("whether task-local network was required", prompt)
+        self.assertIn("do not attempt local capture as a fallback", prompt)
 
-    def test_capture_worker_enriches_two_entities_only_when_snapshot_is_empty(self):
+    def test_capture_worker_spool_contract_replaces_empty_queue_local_enrichment(self):
         directory = ROOT / "automations/memory-stargraph-capture-link-drain"
         prompt = (directory / "prompt.md").read_text()
         heartbeat = (directory / "heartbeat-prompt.md").read_text()
@@ -757,81 +760,56 @@ class AutomationContractTests(unittest.TestCase):
         contract = "\n".join((prompt, heartbeat, bootstrap, readme))
 
         required = (
-            "zero planned items",
-            "do not run entity enrichment",
-            "maximum of two enrichment slots",
-            "effective type is `person` first",
-            "organizations or companies",
-            "teams or projects",
-            "products or technologies",
-            "other public entities",
-            "previous 30 days",
-            "no_eligible_candidates",
-            "agent-reach",
-            "already_sufficient",
-            "must not create capture backlog requests",
-            "do not automatically create product TODOs",
-            "Memory Stargraph Quality & Learning Analyst",
+            "host-managed spool runner",
+            "The .85 host runner is the only authoritative process",
+            "`.102` receives code with the runner disabled by default",
+            "status=completed",
+            "status=failed",
+            "no fixed cutoff",
+            "Product Owner notification contract",
         )
         for phrase in required:
             self.assertIn(phrase, contract)
 
-        self.assertIn(
-            "A non-empty first authoritative snapshot always takes priority",
-            prompt,
-        )
-        self.assertIn(
-            "The total cap remains two attempted entities per invocation",
-            prompt,
-        )
+        self.assertNotIn("Select and reserve candidates", prompt)
+        self.assertNotIn("Before changing a selected entity", prompt)
 
-    def test_capture_worker_reserves_entities_before_enrichment_and_terminalizes_run(self):
+    def test_capture_worker_host_result_evidence_order(self):
         prompt = (
             ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
         ).read_text()
 
-        branch = prompt.index("set invocation mode to `empty_queue_enrichment`")
-        active_run = prompt.index("create an active Goal-linked Run", branch)
-        selection = prompt.index("Select and reserve", active_run)
-        mutation = prompt.index("Before changing a selected entity", selection)
-        self.assertLess(active_run, selection)
-        self.assertLess(selection, mutation)
+        submit = prompt.index("submit exactly one local request")
+        poll = prompt.index("poll/read")
+        terminal = prompt.index("Treat the terminal result file as authoritative")
+        no_local = prompt.index("Do not perform capture, enrichment", terminal)
+        self.assertLess(submit, poll)
+        self.assertLess(poll, terminal)
+        self.assertLess(terminal, no_local)
 
         required = (
-            "persist and read back the selected entity slugs",
-            "reservation collision",
-            "earlier reservation timestamp",
-            "when timestamps are equal, the lexically lowest invocation id wins",
-            "must not mutate an entity until its reservation is verified",
-            "success, failure, or interruption",
-            "unexpected crash leaves the active Run",
-            "truthful per-entity evidence",
+            "request file",
+            "result file",
+            "expected commit",
+            "nonce",
+            "invocation id",
+            "terminal status/result",
+            "host commit",
         )
         for phrase in required:
             self.assertIn(phrase, prompt)
 
-    def test_capture_worker_ranks_every_fallback_category_deterministically(self):
-        prompt = (
-            ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
-        ).read_text()
-
-        categories = (
-            "people",
-            "organizations or companies",
-            "teams or projects",
-            "products or technologies",
-            "other public entities",
-        )
-        for category in categories:
-            self.assertIn(
-                f"For {category}, rank eligible candidates by: deficiency first; "
-                "never-reviewed first; oldest enrichment or review timestamp; "
-                "then lexical slug",
-                prompt,
-            )
-
-        self.assertIn("previous 30 days", prompt)
-        self.assertIn("reserved by another active enrichment Run", prompt)
+    def test_capture_host_runner_is_documented_as_allowlisted_and_disabled_remotely(self):
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        self.assertIn("single `capture_link_drain` operation", runbook)
+        self.assertIn("path confinement", runbook)
+        self.assertIn("size limits", runbook)
+        self.assertIn("freshness", runbook)
+        self.assertIn("replay/idempotence", runbook)
+        self.assertIn("single-runner lock", runbook)
+        self.assertIn("stale processing recovery", runbook)
+        self.assertIn("MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED=1", runbook)
+        self.assertIn("`.102` receives code but keeps the runner disabled", runbook)
 
     def test_cdp_probe_reuses_matching_tab_and_only_closes_created_tab(self):
         probe = (ROOT / "scripts" / "automation" / "cdp_probe.mjs").read_text()

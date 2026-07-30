@@ -42,6 +42,8 @@ tracked_files=(
   public/styles.css
   public/assets/brand/yoda-selection-avatar.png
   scripts/automation/gbrain_worker_api.py
+  scripts/automation/capture_link_host_runner.py
+  scripts/automation/com.tony.memory-stargraph.capture-link-runner.plist
   scripts/automation/manage_capture_backlog.py
   scripts/automation/source_sync_preflight.py
   scripts/automation/worker_persistence.py
@@ -51,6 +53,7 @@ tracked_files=(
   tests/test_frontend_static.py
   tests/test_source_sync_preflight.py
   tests/test_todo_backlog_compaction.py
+  tests/test_capture_link_host_runner.py
   tests/test_yoda_gap_evaluator.py
 )
 

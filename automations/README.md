@@ -18,7 +18,7 @@ placeholders before restoring a definition through the Codex automation UI/API.
 | Local time | Role | Automation ID | Purpose |
 | --- | --- | --- | --- |
 | Daily 8:30 PM | Memory Stargraph UX Engineer | `memory-stargraph-ux-engineer-daily-dogfood` | Dogfood the dashboard-managed app, record journey evidence, and promote at most three reproduced UX findings into planned TODOs within a 2-hour cap. |
-| Daily 12:00 AM | Memory Stargraph Knowledge Curator | `memory-stargraph-capture-link-drain` | Freeze and drain every planned Capture Link request; when the first snapshot is empty, enrich up to two evidence-backed entities with people first. |
+| Daily 12:00 AM | Memory Stargraph Knowledge Curator | `memory-stargraph-capture-link-drain` | Submit one offline local request to the .85 host-managed Capture Link spool runner and report its terminal queue/snapshot/lifecycle evidence without task-local network. |
 | Daily 12:15 AM | GBrain Intelligence Researcher | `gbrain-x-intelligence-capture` | Collect public GBrain usage, releases, explanations, and product inspiration from X. |
 | Daily 1:00 AM | Memory Stargraph Quality & Learning Analyst | `memory-stargraph-daily-learning-intake` | Turn recent evidence into deduplicated, bounded planned TODOs, including the daily Yoda Evaluator comparison loop. |
 | Daily 3:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-daily-reliability` | During verified quiet time, inspect deployed-stack reliability, apply bounded documented remediation, and report capacity headroom. |
@@ -27,7 +27,9 @@ placeholders before restoring a definition through the Codex automation UI/API.
 | Daily 7:30 AM | Memory Stargraph Product Owner | `memory-stargraph-goal-steward-daily-review` | Perform the full Goal health review and create temporary 10-minute worker-watch timers only for newly kicked off or blocked active worker runs. |
 | Sunday 11:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-weekly-resilience` | During verified quiet time, run safe-target load, isolated restore, failover, rollback, and capacity-envelope exercises. |
 
-The midnight Capture Link drain and the 12:15 AM X intelligence capture are
+The midnight Capture Link drain uses the .85 host-managed local spool runner so
+the restricted Curator task never needs task-local curl, GBrain, PostgreSQL, or
+dashboard API access. The 12:15 AM X intelligence capture is
 independently scheduled; neither depends on the other finishing. The Capture
 Knowledge Curator may also be triggered manually at any time without a cutoff.
 The UX Engineer now runs the previous evening with a hard 2-hour cap so long

@@ -193,6 +193,28 @@ Expected scalar values and required tags must still be present with the same
 meaning. Markdown body text is strict except for one optional final newline at
 EOF; added, removed, or changed body lines remain a readback failure.
 
+Canonical Capture Link execution runs through a host-managed local spool on
+`.85` because restricted Codex worker tasks may have no TCP/network access even
+when the host service is healthy. The Curator submits a local request file with
+`python3 scripts/automation/capture_link_host_runner.py submit --invocation-id
+<id> --expected-commit <commit> --mode auto --json` and reads terminal state
+with `python3 scripts/automation/capture_link_host_runner.py status
+--invocation-id <id> --json`. These submit/status commands are offline
+local-file operations. The request schema is versioned and allowlisted to the
+single `capture_link_drain` operation with invocation id, automation id,
+expected commit, mode, created_at, and nonce/idempotency key. The host runner
+validates path confinement, size limits, freshness, replay/idempotence,
+expected source revision, single-runner lock, stale processing recovery, and
+terminal result schema before writing a result file. Runtime state lives under
+`var/capture-link-runner/` or `MEMORY_STARGRAPH_CAPTURE_RUNNER_DIR`, which is
+gitignored. Only `.85` should enable the runner with
+`MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED=1`; `.102` receives code but keeps the
+runner disabled. `.102` receives code but keeps the runner disabled by default
+to prevent duplicate canonical mutations. The
+runner exposes no arbitrary command execution, arbitrary path or slug writes,
+raw database coordinates, task-local network fallback, direct GBrain fallback,
+or approval fallback.
+
 ## SRE reliability and resilience
 
 `memory-stargraph-sre-daily-reliability` runs daily at 3:00 AM and
