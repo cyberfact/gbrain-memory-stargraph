@@ -11,6 +11,7 @@ failures exactly.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -279,25 +280,12 @@ def save_raw(
 
 
 def _frontmatter_tags(markdown: str) -> set[str]:
-    if not markdown.startswith("---\n"):
-        return set()
-    end = markdown.find("\n---", 4)
-    if end < 0:
-        return set()
-    tags: set[str] = set()
-    lines = markdown[4:end].splitlines()
-    for index, line in enumerate(lines):
-        if re.match(r"^tags:\s*\[", line):
-            inside = line.split("[", 1)[1].rsplit("]", 1)[0]
-            tags.update(item.strip().strip("'\"") for item in inside.split(",") if item.strip())
-        if line.strip() == "tags:":
-            for nested in lines[index + 1 :]:
-                if not nested.startswith((" ", "-")):
-                    break
-                match = re.match(r"^\s*-\s*(.+?)\s*$", nested)
-                if match:
-                    tags.add(match.group(1).strip().strip("'\""))
-    return {tag for tag in tags if tag}
+    tags = _frontmatter_values(markdown).get("tags", [])
+    if isinstance(tags, list):
+        return {str(tag) for tag in tags if str(tag)}
+    if isinstance(tags, str):
+        return {tag.strip() for tag in tags.split(",") if tag.strip()}
+    return set()
 
 
 def _split_frontmatter(markdown: str) -> tuple[str, str]:
@@ -313,16 +301,120 @@ def _split_frontmatter(markdown: str) -> tuple[str, str]:
 
 
 def _frontmatter_scalars(markdown: str) -> dict[str, str]:
+    return {
+        key: str(value)
+        for key, value in _frontmatter_values(markdown).items()
+        if not isinstance(value, list)
+    }
+
+
+def _strip_yaml_quotes(value: str) -> str:
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+        return stripped[1:-1]
+    return stripped
+
+
+def _parse_inline_list(value: str) -> list[str]:
+    inside = value.strip()[1:-1]
+    if not inside.strip():
+        return []
+    return [_normalize_scalar(item) for item in inside.split(",")]
+
+
+def _fold_block(lines: list[str], style: str) -> str:
+    cleaned = [line[2:] if line.startswith("  ") else line.lstrip() for line in lines]
+    if style.startswith("|"):
+        value = "\n".join(cleaned)
+    else:
+        paragraphs: list[str] = []
+        current: list[str] = []
+        for line in cleaned:
+            if line == "":
+                if current:
+                    paragraphs.append(" ".join(current))
+                    current = []
+                paragraphs.append("")
+            else:
+                current.append(line)
+        if current:
+            paragraphs.append(" ".join(current))
+        value = "\n".join(paragraphs)
+    if not style.endswith("-"):
+        value += "\n"
+    return value
+
+
+def _normalize_timestamp(value: str) -> str | None:
+    candidate = value.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}([T ][0-9:.+-]+|Z)?", candidate):
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return dt.date.fromisoformat(candidate).isoformat()
+        except ValueError:
+            return None
+    if parsed.microsecond:
+        return parsed.isoformat()
+    return parsed.replace(microsecond=0).isoformat()
+
+
+def _normalize_scalar(value: object) -> str:
+    text = _strip_yaml_quotes(str(value))
+    lowered = text.lower()
+    if lowered in {"true", "false", "null"}:
+        return lowered
+    timestamp = _normalize_timestamp(text)
+    if timestamp:
+        return timestamp
+    return text
+
+
+def _frontmatter_values(markdown: str) -> dict[str, object]:
     frontmatter, _ = _split_frontmatter(markdown)
-    values: dict[str, str] = {}
-    for line in frontmatter.splitlines():
-        if line.startswith((" ", "-")) or ":" not in line:
+    values: dict[str, object] = {}
+    lines = frontmatter.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line or line.startswith((" ", "-")) or ":" not in line:
+            index += 1
             continue
         key, raw_value = line.split(":", 1)
+        key = key.strip()
         value = raw_value.strip()
-        if value and not value.startswith("["):
-            values[key.strip()] = value.strip("'\"")
+        index += 1
+        if value in {">", ">-", "|", "|-"}:
+            block: list[str] = []
+            while index < len(lines) and (lines[index].startswith(" ") or not lines[index]):
+                block.append(lines[index])
+                index += 1
+            values[key] = _normalize_scalar(_fold_block(block, value))
+            continue
+        if value == "":
+            items: list[str] = []
+            while index < len(lines) and lines[index].startswith(" "):
+                match = re.match(r"^\s*-\s*(.+?)\s*$", lines[index])
+                if match:
+                    items.append(_normalize_scalar(match.group(1)))
+                index += 1
+            values[key] = items
+            continue
+        if value.startswith("[") and value.endswith("]"):
+            values[key] = _parse_inline_list(value)
+            continue
+        values[key] = _normalize_scalar(value)
     return values
+
+
+def _body_matches(expected: str, actual: str) -> bool:
+    if expected == actual:
+        return True
+    expected_without_final = expected[:-1] if expected.endswith("\n") else expected
+    actual_without_final = actual[:-1] if actual.endswith("\n") else actual
+    return expected_without_final == actual_without_final
 
 
 def _raw_readback_matches(expected: str, actual: str) -> bool:
@@ -330,13 +422,14 @@ def _raw_readback_matches(expected: str, actual: str) -> bool:
         return True
     expected_frontmatter, expected_body = _split_frontmatter(expected)
     actual_frontmatter, actual_body = _split_frontmatter(actual)
-    if not expected_frontmatter or not actual_frontmatter or expected_body != actual_body:
+    if not expected_frontmatter or not actual_frontmatter or not _body_matches(expected_body, actual_body):
         return False
-    actual_scalars = _frontmatter_scalars(actual)
-    for key, value in _frontmatter_scalars(expected).items():
+    expected_values = _frontmatter_values(expected)
+    actual_values = _frontmatter_values(actual)
+    for key, value in expected_values.items():
         if key == "tags":
             continue
-        if actual_scalars.get(key) != value:
+        if actual_values.get(key) != value:
             return False
     return _frontmatter_tags(expected).issubset(_frontmatter_tags(actual))
 

@@ -183,6 +183,13 @@ loopback. Direct `gbrain` is only an explicit host fallback when
 `MEMORY_STARGRAPH_DIRECT_GBRAIN_FALLBACK=1`, so restricted-worker loopback
 refusal does not force workers onto local PostgreSQL/GBrain paths.
 
+Raw save readback compares frontmatter semantically for the YAML subset used by
+worker entities: top-level scalars, folded or literal block scalars, simple
+lists, timestamp spelling, and tag order may normalize without failing a save.
+Expected scalar values and required tags must still be present with the same
+meaning. Markdown body text is strict except for one optional final newline at
+EOF; added, removed, or changed body lines remain a readback failure.
+
 ## SRE reliability and resilience
 
 `memory-stargraph-sre-daily-reliability` runs daily at 3:00 AM and

@@ -210,6 +210,132 @@ status: completed
 
         self.assertTrue(persistence._raw_readback_matches(expected, actual))
 
+    def test_save_accepts_long_folded_title_and_report_slug(self):
+        expected = """---
+type: run
+title: Memory Stargraph Curator Empty Queue Enrichment Run With A Very Long Title That GBrain May Fold
+report_slug: reports/memory-stargraph-capture-link-drain-2026-07-30-sg0171-empty-queue-enrichment-85
+status: completed
+tags:
+  - completed
+  - capture-link
+---
+
+# Curator Run
+"""
+        actual = """---
+status: completed
+report_slug: >-
+  reports/memory-stargraph-capture-link-drain-2026-07-30-sg0171-empty-queue-enrichment-85
+title: >-
+  Memory Stargraph Curator Empty Queue Enrichment Run With A Very Long Title
+  That GBrain May Fold
+type: run
+tags:
+  - capture-link
+  - completed
+---
+
+# Curator Run
+"""
+
+        self.assertTrue(persistence._raw_readback_matches(expected, actual))
+
+    def test_save_accepts_timestamp_normalization(self):
+        expected = """---
+type: run
+started_at: '2026-07-30T10:20:40-07:00'
+completed_at: 2026-07-30 10:21:40-07:00
+tags:
+  - completed
+---
+
+# Timestamp Run
+"""
+        actual = """---
+completed_at: '2026-07-30T10:21:40-07:00'
+started_at: 2026-07-30 10:20:40-07:00
+type: run
+tags: [completed]
+---
+
+# Timestamp Run
+"""
+
+        self.assertTrue(persistence._raw_readback_matches(expected, actual))
+
+    def test_save_accepts_reordered_tags(self):
+        expected = """---
+type: run
+tags:
+  - completed
+  - capture-link
+  - memory-stargraph
+---
+
+# Tags Run
+"""
+        actual = """---
+type: run
+tags:
+  - memory-stargraph
+  - completed
+  - capture-link
+---
+
+# Tags Run
+"""
+
+        self.assertTrue(persistence._raw_readback_matches(expected, actual))
+
+    def test_save_rejects_true_scalar_mismatch(self):
+        expected = """---
+type: run
+status: completed
+---
+
+# Scalar Run
+"""
+        actual = """---
+type: run
+status: failed
+---
+
+# Scalar Run
+"""
+
+        self.assertFalse(persistence._raw_readback_matches(expected, actual))
+
+    def test_save_rejects_true_body_mismatch(self):
+        expected = """---
+type: run
+status: completed
+---
+
+# Body Run
+
+Expected body.
+"""
+        actual = """---
+type: run
+status: completed
+---
+
+# Body Run
+
+Different body.
+"""
+
+        self.assertFalse(persistence._raw_readback_matches(expected, actual))
+
+    def test_body_policy_allows_only_one_optional_final_newline(self):
+        expected = "---\ntype: run\n---\n\n# Body Run\n"
+        actual = "---\ntype: run\n---\n\n# Body Run"
+        extra = "---\ntype: run\n---\n\n# Body Run\n\n"
+
+        self.assertTrue(persistence._raw_readback_matches(expected, actual))
+        self.assertFalse(persistence._raw_readback_matches(expected, extra))
+
     def test_direct_gbrain_is_disabled_by_default_when_worker_api_fails(self):
         fake = FakeCurl(failures=3)
         route = persistence.WorkerRoute("https://memory-stargraph.example.test", (), "test")
