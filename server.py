@@ -172,7 +172,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.172"
+UI_VERSION = "V1.0.173"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -1633,7 +1633,7 @@ def take_review_action_payload(proposal_id, action, payload):
     if not idempotency_key:
         idempotency_key = f"{TAKE_REVIEW_ACTOR}:{action}:{proposal_id}"
     return {
-        "id": str(proposal_id),
+        "id": take_review_tool_id(proposal_id),
         "proposal_id": str(proposal_id),
         "acted_by": str(raw_payload.get("acted_by") or TAKE_REVIEW_ACTOR).strip() or TAKE_REVIEW_ACTOR,
         "idempotency_key": idempotency_key,
@@ -1644,6 +1644,13 @@ def take_review_action_payload(proposal_id, action, payload):
             "ui_version": UI_VERSION,
         },
     }
+
+
+def take_review_tool_id(proposal_id):
+    text = str(proposal_id or "").strip()
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    return text
 
 
 def take_review_bulk_payload(payload):
@@ -1658,6 +1665,7 @@ def take_review_bulk_payload(payload):
     return {
         "action": action,
         "ids": ids[:TAKE_REVIEW_MAX_LIMIT],
+        "actions": [{"id": take_review_tool_id(item), "action": action} for item in ids[:TAKE_REVIEW_MAX_LIMIT]],
         "acted_by": str(raw_payload.get("acted_by") or TAKE_REVIEW_ACTOR).strip() or TAKE_REVIEW_ACTOR,
         "idempotency_key": idempotency_key,
         "reason": str(raw_payload.get("reason") or "").strip(),

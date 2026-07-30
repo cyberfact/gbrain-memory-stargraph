@@ -937,6 +937,29 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["action"], "accept")
         self.assertIn(("review_take_proposal", "tp-1", "accept", payload), fake_store.calls)
 
+    def test_take_proposal_tool_payload_uses_numeric_id_when_available(self):
+        payload = server.take_review_action_payload("42", "accept", {"idempotency_key": "abc-123"})
+
+        self.assertEqual(payload["id"], 42)
+        self.assertIsInstance(payload["id"], int)
+        self.assertEqual(payload["proposal_id"], "42")
+
+    def test_take_proposal_tool_payload_preserves_non_numeric_audit_id(self):
+        payload = server.take_review_action_payload("tp-1", "accept", {"idempotency_key": "abc-123"})
+
+        self.assertEqual(payload["id"], "tp-1")
+        self.assertEqual(payload["proposal_id"], "tp-1")
+
+    def test_bulk_take_review_payload_includes_remote_actions_with_numeric_ids(self):
+        payload = server.take_review_bulk_payload({
+            "action": "accept",
+            "ids": ["42", "43"],
+            "idempotency_key": "bulk-123",
+        })
+
+        self.assertEqual(payload["ids"], ["42", "43"])
+        self.assertEqual(payload["actions"], [{"id": 42, "action": "accept"}, {"id": 43, "action": "accept"}])
+
     def test_bulk_take_review_rejects_missing_ids_before_store_call(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):
