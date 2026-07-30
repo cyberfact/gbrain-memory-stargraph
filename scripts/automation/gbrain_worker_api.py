@@ -28,6 +28,13 @@ ROUTES = [
         "curl_shape": "curl -sS --fail -X POST -H 'Content-Type: application/json' -d @- <base-url>/api/entity-save/<URL-encoded-slug>",
     },
     {
+        "action": "mutate-tags",
+        "method": "POST",
+        "endpoint": "/api/entity-tags/<URL-encoded-slug>",
+        "mutates_gbrain": True,
+        "curl_shape": "curl -sS --fail -X POST -H 'Content-Type: application/json' -d @- <base-url>/api/entity-tags/<URL-encoded-slug>",
+    },
+    {
         "action": "add-link",
         "method": "POST",
         "endpoint": "/api/entity-link/<URL-encoded-source-slug>",

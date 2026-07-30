@@ -170,6 +170,16 @@ has been rewritten. Use the Stargraph tag endpoint, for example
 readback has no standalone `active` tag, no active title/body marker, and
 semantic fields such as `ux_lease` and `active_change` are false.
 
+Recurring worker Run/report persistence uses
+`scripts/automation/worker_persistence.py`. The helper resolves the configured
+dashboard-managed `.85` route from the local deployment config before the
+loopback default, performs bounded retries, saves raw entities through
+`/api/entity-save/<slug>`, verifies with `/api/entity-raw/<slug>`, and releases
+or changes page tags through `/api/entity-tags/<slug>`. Direct `gbrain` is only
+an explicit host fallback when `MEMORY_STARGRAPH_DIRECT_GBRAIN_FALLBACK=1`, so
+restricted-worker loopback refusal does not force workers onto local
+PostgreSQL/GBrain paths.
+
 ## SRE reliability and resilience
 
 `memory-stargraph-sre-daily-reliability` runs daily at 3:00 AM and

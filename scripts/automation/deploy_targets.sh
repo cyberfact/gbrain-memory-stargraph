@@ -44,7 +44,9 @@ tracked_files=(
   scripts/automation/gbrain_worker_api.py
   scripts/automation/manage_capture_backlog.py
   scripts/automation/source_sync_preflight.py
+  scripts/automation/worker_persistence.py
   scripts/automation/yoda_gap_evaluator.py
+  automations/memory-stargraph-capture-link-drain/prompt.md
   tests/browser_smoke.mjs
   tests/test_frontend_static.py
   tests/test_source_sync_preflight.py
