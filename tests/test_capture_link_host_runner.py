@@ -92,6 +92,20 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
             finally:
                 runner.release_lock(root, fd)
 
+    def test_stale_empty_lock_is_recovered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner.ensure_dirs(root)
+            lock = runner.lock_path(root)
+            lock.write_text("", encoding="utf-8")
+            old = runner.pacific_now().timestamp() - runner.STALE_LOCK_SECONDS - 5
+            os.utime(lock, (old, old))
+            fd = runner.acquire_lock(root)
+            try:
+                self.assertEqual(lock.read_text(encoding="utf-8"), str(os.getpid()))
+            finally:
+                runner.release_lock(root, fd)
+
     def test_crash_recovery_terminalizes_stale_processing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

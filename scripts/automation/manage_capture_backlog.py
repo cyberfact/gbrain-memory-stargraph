@@ -215,8 +215,9 @@ def fixture_root(capture_id: str, status: str) -> str:
 def run_gbrain(
     args: list[str],
     input_text: str | None = None,
-    timeout: int = 180,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    timeout = timeout or int(os.environ.get("MEMORY_STARGRAPH_CAPTURE_BACKLOG_GBRAIN_TIMEOUT", "45"))
     try:
         return subprocess.run(
             ["gbrain", *args],

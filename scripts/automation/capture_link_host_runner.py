@@ -27,6 +27,7 @@ AUTOMATION_ID = "memory-stargraph-capture-link-drain"
 MAX_REQUEST_BYTES = 8192
 MAX_AGE_SECONDS = 6 * 60 * 60
 PROCESSING_TIMEOUT_SECONDS = 45 * 60
+STALE_LOCK_SECONDS = 60
 MAX_LOG_BYTES = 512 * 1024
 DEFAULT_MODE = "auto"
 ALLOWED_MODES = {"auto", "capture_drain", "empty_queue_enrichment"}
@@ -470,9 +471,36 @@ def acquire_lock(root: Path) -> int:
     ensure_dirs(root)
     path = lock_path(root)
     try:
-        return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+        return fd
     except FileExistsError as exc:
+        if stale_lock_recovered(path):
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, str(os.getpid()).encode("utf-8"))
+            return fd
         raise RunnerError("runner already active") from exc
+
+
+def stale_lock_recovered(path: Path) -> bool:
+    try:
+        age = time.time() - path.stat().st_mtime
+        content = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return True
+    if content.isdigit():
+        try:
+            os.kill(int(content), 0)
+            return False
+        except ProcessLookupError:
+            path.unlink(missing_ok=True)
+            return True
+        except PermissionError:
+            return False
+    if age > STALE_LOCK_SECONDS:
+        path.unlink(missing_ok=True)
+        return True
+    return False
 
 
 def release_lock(root: Path, fd: int) -> None:
