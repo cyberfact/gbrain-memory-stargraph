@@ -740,6 +740,11 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("Treat the terminal result file as authoritative", prompt)
         self.assertIn("Do not perform capture, enrichment, GBrain writes", prompt)
         self.assertIn("host runner must execute the deterministic empty-queue enrichment path", prompt)
+        self.assertIn("Poll for up to 10 minutes", prompt)
+        self.assertIn("daemon heartbeat timestamps are fresh", prompt)
+        self.assertIn("runner ownership is stable", prompt)
+        self.assertNotIn("worker_persistence.py prepare", prompt)
+        self.assertNotIn("explicit top-level `curl` commands", prompt)
 
     def test_capture_worker_reports_host_runner_terminal_result_without_fallback(self):
         prompt = (
@@ -770,6 +775,10 @@ class AutomationContractTests(unittest.TestCase):
             "status=failed",
             "deterministic empty-queue enrichment",
             "no_eligible_candidate=true",
+            "scope_complete",
+            "total_scope_count",
+            "uninspected_count",
+            "selection_truncated",
             "no fixed cutoff",
             "Product Owner notification contract",
         )
@@ -778,6 +787,7 @@ class AutomationContractTests(unittest.TestCase):
 
         self.assertIn("persisted/read reservation evidence before mutation", prompt)
         self.assertIn("must not return `completed_empty_snapshot_noop`", prompt)
+        self.assertIn("no_eligible_candidate=true` is allowed only when the complete declared scope was inspected", prompt)
 
     def test_capture_worker_host_result_evidence_order(self):
         prompt = (

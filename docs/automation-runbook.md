@@ -204,8 +204,8 @@ local-file operations. The request schema is versioned and allowlisted to the
 single `capture_link_drain` operation with invocation id, automation id,
 expected commit, mode, created_at, and nonce/idempotency key. The host runner
 validates path confinement, size limits, freshness, replay/idempotence,
-expected source revision, single-runner lock, stale processing recovery, and
-terminal result schema before writing a result file. Runtime state lives under
+expected source revision, single-runner lock, stale processing recovery, bounded
+subprocess timeouts, and terminal result schema before writing a result file. Runtime state lives under
 `var/capture-link-runner/` or `MEMORY_STARGRAPH_CAPTURE_RUNNER_DIR`, which is
 gitignored. Only `.85` should enable the runner with
 `MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED=1`; `.102` receives code but keeps the
@@ -215,13 +215,26 @@ runner exposes no arbitrary command execution, arbitrary path or slug writes,
 raw database coordinates, task-local network fallback, direct GBrain fallback,
 or approval fallback.
 
+Curator polling remains local-file only. Poll for up to 10 minutes unless a
+Product Owner-approved runner maximum is longer. Continue while daemon
+`heartbeat_at`/`phase_updated_at` values are fresh and runner ownership remains
+stable; fail early only on terminal failure, stale heartbeat, runner ownership
+change, or the hard overall deadline. Runner state includes `phase`,
+`phase_started_at`, `phase_updated_at`, active invocation, and `processed/total`
+progress where known.
+
 For an empty authoritative snapshot, `completed_empty_snapshot_noop` is
 forbidden. The host runner must run deterministic empty-queue enrichment or
 terminalize with deterministic no-eligible-candidate evidence. Terminal results
-include selection version, inspected scope, candidate count, exclusion
+include selection version, inspected scope, `scope_complete`,
+`total_scope_count`, `inspected_count`, `uninspected_count`,
+`selection_truncated`, `evidence_display_truncated`, candidate count, exclusion
 counts/reasons, ordered candidates, reservation persistence/readback evidence
-before entity mutation, outcomes, failures, metrics, and
-`no_eligible_candidate=true` only when the eligible candidate set is empty.
+before entity mutation, outcomes, failures, metrics, and logically consistent
+no-candidate fields. `no_eligible_candidate=true` is valid only when the
+complete declared scope was inspected and no eligible candidate exists. If a
+bounded inspected scope finds no candidate while uninspected rows remain, the
+result must name that bounded claim and set `no_eligible_candidate=false`.
 Daemon-produced ownership evidence includes `runner_host_role=.85-authoritative`,
 `runner_enabled=true`, `runner_instance_id`, pid/start time, atomic request
 claim, and `.102` runner-disabled verification. Offline `status` and `health`

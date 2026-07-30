@@ -35,11 +35,20 @@ ENRICHMENT_SELECTION_VERSION = "empty-queue-enrichment-v1"
 MAX_ENRICHMENT_CANDIDATES = 500
 MAX_ENRICHMENT_ATTEMPTS = 2
 MAX_ENRICHMENT_INSPECTIONS = 20
+MAX_ENRICHMENT_EVIDENCE_ITEMS = 20
 ENRICHMENT_ENTITY_READ_TIMEOUT = 15
+CURATOR_POLL_MAX_SECONDS = 10 * 60
+RUNNER_HEARTBEAT_STALE_SECONDS = 2 * 60
 
 
 class RunnerError(RuntimeError):
     pass
+
+
+class RunnerPhaseError(RunnerError):
+    def __init__(self, phase: str, message: str):
+        super().__init__(message)
+        self.phase = phase
 
 
 def pacific_now() -> dt.datetime:
@@ -135,7 +144,16 @@ def parse_time(value: str) -> dt.datetime:
 
 
 def current_commit() -> str:
-    result = subprocess.run(["git", "rev-parse", "HEAD"], text=True, capture_output=True, check=False)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RunnerPhaseError("source_validation", f"git rev-parse failed: {exc}") from exc
     if result.returncode != 0:
         raise RunnerError((result.stderr or result.stdout).strip() or "git rev-parse failed")
     return result.stdout.strip()
@@ -152,7 +170,7 @@ def run_gbrain(args: list[str], input_text: str | None = None, timeout: int = 12
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return subprocess.CompletedProcess(args, 127, "", str(exc))
+        return subprocess.CompletedProcess(["gbrain", *args], 124, "", str(exc))
 
 
 def result_error(result: subprocess.CompletedProcess[str]) -> str:
@@ -455,15 +473,67 @@ def read_status(root: Path, invocation_id: str) -> dict[str, object]:
         payload = json.loads(target.read_text(encoding="utf-8"))
         payload.setdefault("result_file", str(target))
         return payload
+    daemon_state = read_runner_state(root)
     return {
         "ok": True,
         "status": "pending",
         "result_file": str(target),
+        "polling_guidance": {
+            "max_seconds": CURATOR_POLL_MAX_SECONDS,
+            "heartbeat_stale_seconds": RUNNER_HEARTBEAT_STALE_SECONDS,
+            "continue_while": "daemon heartbeat fresh and runner ownership stable",
+        },
         "submitter_context": {
             "network_required": False,
             "current_process_runner_enabled": current_process_enabled(),
         },
-        "daemon_state": read_runner_state(root),
+        "daemon_state": daemon_state,
+    }
+
+
+def curator_poll_decision(
+    status_payload: dict[str, object],
+    *,
+    started_at: dt.datetime,
+    now: dt.datetime | None = None,
+    expected_runner_instance_id: str | None = None,
+    max_seconds: int = CURATOR_POLL_MAX_SECONDS,
+    heartbeat_stale_seconds: int = RUNNER_HEARTBEAT_STALE_SECONDS,
+) -> dict[str, object]:
+    current = now or pacific_now()
+    elapsed = (current.astimezone(dt.timezone.utc) - started_at.astimezone(dt.timezone.utc)).total_seconds()
+    status = status_payload.get("status")
+    if status in {"completed", "failed"}:
+        return {"decision": "terminal", "reason": str(status), "elapsed_seconds": elapsed}
+    if elapsed > max_seconds:
+        return {"decision": "fail", "reason": "overall_deadline_exceeded", "elapsed_seconds": elapsed}
+    daemon_state = status_payload.get("daemon_state")
+    if not isinstance(daemon_state, dict):
+        return {"decision": "continue", "reason": "not_claimed_yet", "elapsed_seconds": elapsed}
+    if expected_runner_instance_id and daemon_state.get("runner_instance_id") != expected_runner_instance_id:
+        return {"decision": "fail", "reason": "runner_ownership_changed", "elapsed_seconds": elapsed}
+    heartbeat = daemon_state.get("heartbeat_at") or daemon_state.get("phase_updated_at") or daemon_state.get("updated_at")
+    if not isinstance(heartbeat, str):
+        return {"decision": "fail", "reason": "missing_daemon_heartbeat", "elapsed_seconds": elapsed}
+    try:
+        heartbeat_at = parse_time(heartbeat)
+    except RunnerError:
+        return {"decision": "fail", "reason": "invalid_daemon_heartbeat", "elapsed_seconds": elapsed}
+    heartbeat_age = (current.astimezone(dt.timezone.utc) - heartbeat_at.astimezone(dt.timezone.utc)).total_seconds()
+    if heartbeat_age > heartbeat_stale_seconds:
+        return {
+            "decision": "fail",
+            "reason": "stale_daemon_heartbeat",
+            "elapsed_seconds": elapsed,
+            "heartbeat_age_seconds": heartbeat_age,
+        }
+    return {
+        "decision": "continue",
+        "reason": "fresh_daemon_progress",
+        "elapsed_seconds": elapsed,
+        "heartbeat_age_seconds": heartbeat_age,
+        "phase": daemon_state.get("phase"),
+        "progress": daemon_state.get("progress"),
     }
 
 
@@ -597,6 +667,49 @@ def write_runner_state(root: Path, status: str, extra: dict[str, object] | None 
     return payload
 
 
+def write_phase_state(
+    root: Path,
+    values: dict[str, str],
+    phase: str,
+    *,
+    processed: int | None = None,
+    total: int | None = None,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    previous = read_runner_state(root) or {}
+    now = iso_now()
+    phase_started_at = previous.get("phase_started_at") if previous.get("phase") == phase else None
+    progress: dict[str, object] = {}
+    if processed is not None:
+        progress["processed"] = processed
+    if total is not None:
+        progress["total"] = total
+    return write_runner_state(
+        root,
+        "processing",
+        {
+            "active_invocation_id": values["invocation_id"],
+            "phase": phase,
+            "phase_started_at": phase_started_at or now,
+            "phase_updated_at": now,
+            "heartbeat_at": now,
+            "curator_poll_contract": {
+                "max_seconds": CURATOR_POLL_MAX_SECONDS,
+                "heartbeat_stale_seconds": RUNNER_HEARTBEAT_STALE_SECONDS,
+                "continue_while": "daemon heartbeat fresh and runner ownership stable",
+                "fail_early_on": [
+                    "terminal_failure",
+                    "stale_heartbeat",
+                    "runner_ownership_change",
+                    "hard_overall_deadline",
+                ],
+            },
+            **({"progress": progress} if progress else {}),
+            **(extra or {}),
+        },
+    )
+
+
 def read_runner_state(root: Path) -> dict[str, object] | None:
     path = state_path(root)
     if not path.exists():
@@ -668,7 +781,13 @@ def entity_is_public(markdown: str) -> bool:
     return bool(source_urls(markdown))
 
 
-def inspect_enrichment_candidates(now: dt.datetime | None = None) -> dict[str, object]:
+def inspect_enrichment_candidates(
+    now: dt.datetime | None = None,
+    *,
+    root: Path | None = None,
+    values: dict[str, str] | None = None,
+    max_inspections: int | None = None,
+) -> dict[str, object]:
     inspected_scope = [
         {"type": "person", "limit": MAX_ENRICHMENT_CANDIDATES},
         {"type": "organization", "limit": MAX_ENRICHMENT_CANDIDATES},
@@ -678,17 +797,31 @@ def inspect_enrichment_candidates(now: dt.datetime | None = None) -> dict[str, o
         {"type": "product", "limit": MAX_ENRICHMENT_CANDIDATES},
         {"type": "technology", "limit": MAX_ENRICHMENT_CANDIDATES},
     ]
+    rows_by_scope: list[tuple[int, dict[str, object], list[dict[str, str]]]] = []
+    total_scope_count = 0
+    for type_rank, scope in enumerate(inspected_scope):
+        if root is not None and values is not None:
+            write_phase_state(root, values, "candidate_listing", processed=type_rank, total=len(inspected_scope), extra={"current_type": scope["type"]})
+        rows = list_entities(str(scope["type"]), int(scope["limit"]))
+        rows_by_scope.append((type_rank, scope, rows))
+        scope["listed_count"] = len(rows)
+        total_scope_count += len(rows)
+
     exclusions: dict[str, int] = {}
     candidates: list[dict[str, object]] = []
     inspected_count = 0
-    inspection_truncated = False
-    for type_rank, scope in enumerate(inspected_scope):
-        for row in list_entities(str(scope["type"]), int(scope["limit"])):
-            if inspected_count >= MAX_ENRICHMENT_INSPECTIONS:
-                inspection_truncated = True
+    selection_truncated = False
+    stop_reason = "scope_exhausted"
+    for type_rank, scope, rows in rows_by_scope:
+        for row in rows:
+            if max_inspections is not None and inspected_count >= max_inspections:
+                selection_truncated = True
+                stop_reason = "inspection_limit_reached"
                 break
             inspected_count += 1
             slug = row["slug"]
+            if root is not None and values is not None:
+                write_phase_state(root, values, "entity_reads", processed=inspected_count, total=total_scope_count, extra={"current_slug": slug})
             try:
                 markdown = get_entity(slug, timeout=ENRICHMENT_ENTITY_READ_TIMEOUT)
             except RunnerError:
@@ -715,27 +848,56 @@ def inspect_enrichment_candidates(now: dt.datetime | None = None) -> dict[str, o
                 "source_count": len(source_urls(markdown)),
                 "order_key": [type_rank, -len(deficiencies), slug],
             })
-        if inspection_truncated:
+            if len(candidates) >= MAX_ENRICHMENT_ATTEMPTS:
+                selection_truncated = inspected_count < total_scope_count
+                stop_reason = "eligible_attempt_limit_reached" if selection_truncated else "scope_exhausted"
+                break
+        if selection_truncated:
             break
     candidates.sort(key=lambda item: (int(item["type_rank"]), -int(item["deficiency_count"]), str(item["slug"])))
     for index, candidate in enumerate(candidates, 1):
         candidate["selection_order"] = index
         candidate.pop("order_key", None)
+    scope_complete = inspected_count >= total_scope_count and not selection_truncated
+    uninspected_count = max(total_scope_count - inspected_count, 0)
+    no_eligible_candidate = len(candidates) == 0 and scope_complete
+    no_eligible_within_inspected = len(candidates) == 0 and not scope_complete
+    evidence_display_truncated = len(candidates) > MAX_ENRICHMENT_EVIDENCE_ITEMS
     return {
         "selection_version": ENRICHMENT_SELECTION_VERSION,
         "inspected_scope": inspected_scope,
+        "scope_complete": scope_complete,
+        "total_scope_count": total_scope_count,
         "inspected_count": inspected_count,
-        "inspection_limit": MAX_ENRICHMENT_INSPECTIONS,
-        "inspection_truncated": inspection_truncated,
+        "uninspected_count": uninspected_count,
+        "inspection_limit": max_inspections,
+        "selection_truncated": selection_truncated,
+        "inspection_truncated": selection_truncated,
+        "evidence_display_truncated": evidence_display_truncated,
+        "stop_reason": stop_reason,
         "candidate_count": len(candidates),
         "exclusion_counts": exclusions,
-        "ordered_candidates": candidates,
+        "ordered_candidates": candidates[:MAX_ENRICHMENT_EVIDENCE_ITEMS],
         "selected_candidates": candidates[:MAX_ENRICHMENT_ATTEMPTS],
-        "no_eligible_candidate": len(candidates) == 0,
+        "no_eligible_candidate": no_eligible_candidate,
+        "no_eligible_candidate_within_inspected_scope": no_eligible_within_inspected,
     }
 
 
-def reserve_candidate(values: dict[str, str], run_slug: str, report_slug: str, candidate: dict[str, object], reservations: list[dict[str, object]], base_evidence: dict[str, object]) -> dict[str, object]:
+def reserve_candidate(
+    values: dict[str, str],
+    run_slug: str,
+    report_slug: str,
+    candidate: dict[str, object],
+    reservations: list[dict[str, object]],
+    base_evidence: dict[str, object],
+    *,
+    root: Path | None = None,
+    processed: int | None = None,
+    total: int | None = None,
+) -> dict[str, object]:
+    if root is not None:
+        write_phase_state(root, values, "reservation_persistence", processed=processed, total=total, extra={"current_slug": candidate["slug"]})
     reservation = {
         "slug": candidate["slug"],
         "type": candidate["type"],
@@ -756,8 +918,10 @@ def reserve_candidate(values: dict[str, str], run_slug: str, report_slug: str, c
     return {**reservation, "readback_verified": True}
 
 
-def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]) -> dict[str, object]:
+def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object], *, root: Path | None = None, processed: int | None = None, total: int | None = None) -> dict[str, object]:
     slug = str(candidate["slug"])
+    if root is not None:
+        write_phase_state(root, values, "enrichment", processed=processed, total=total, extra={"current_slug": slug})
     before = get_entity(slug)
     stamp = iso_now()
     urls = source_urls(before)
@@ -795,8 +959,9 @@ def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]
     }
 
 
-def run_empty_queue_enrichment(values: dict[str, str], run_slug: str, report_slug: str, base_evidence: dict[str, object]) -> dict[str, object]:
-    selection = inspect_enrichment_candidates()
+def run_empty_queue_enrichment(root: Path, values: dict[str, str], run_slug: str, report_slug: str, base_evidence: dict[str, object]) -> dict[str, object]:
+    write_phase_state(root, values, "candidate_listing", processed=0, total=7)
+    selection = inspect_enrichment_candidates(root=root, values=values)
     reservations: list[dict[str, object]] = []
     outcomes: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
@@ -815,11 +980,40 @@ def run_empty_queue_enrichment(values: dict[str, str], run_slug: str, report_slu
                 "failed_enrichments": 0,
             },
             "no_eligible_candidate": True,
+            "no_eligible_candidate_within_inspected_scope": False,
         }
-    for candidate in selection["selected_candidates"]:
+    if selection.get("no_eligible_candidate_within_inspected_scope"):
+        return {
+            "mode": "empty_queue_enrichment",
+            "result": "completed_empty_snapshot_no_eligible_candidates_within_inspected_scope",
+            "selection": selection,
+            "reservations": reservations,
+            "outcomes": outcomes,
+            "failures": failures,
+            "metrics": {
+                "eligible_candidate_count": 0,
+                "attempted_enrichments": 0,
+                "successful_enrichments": 0,
+                "failed_enrichments": 0,
+            },
+            "no_eligible_candidate": False,
+            "no_eligible_candidate_within_inspected_scope": True,
+        }
+    selected = list(selection["selected_candidates"])
+    for index, candidate in enumerate(selected, 1):
         try:
-            reservation = reserve_candidate(values, run_slug, report_slug, candidate, reservations, {**base_evidence, "enrichment_selection": selection})
-            outcome = apply_entity_enrichment(values, candidate)
+            reservation = reserve_candidate(
+                values,
+                run_slug,
+                report_slug,
+                candidate,
+                reservations,
+                {**base_evidence, "enrichment_selection": selection},
+                root=root,
+                processed=index,
+                total=len(selected),
+            )
+            outcome = apply_entity_enrichment(values, candidate, root=root, processed=index, total=len(selected))
             outcomes.append({**outcome, "reservation": reservation})
         except Exception as exc:
             failures.append({"slug": candidate.get("slug"), "error": str(exc), "result": "failed"})
@@ -837,6 +1031,7 @@ def run_empty_queue_enrichment(values: dict[str, str], run_slug: str, report_slu
             "failed_enrichments": len(failures),
         },
         "no_eligible_candidate": False,
+        "no_eligible_candidate_within_inspected_scope": False,
     }
 
 
@@ -851,53 +1046,100 @@ def log_event(root: Path, event: dict[str, object]) -> None:
 
 
 def run_capture_link_drain(root: Path, values: dict[str, str], claim: dict[str, object]) -> dict[str, object]:
-    commit = current_commit()
-    if commit != values["expected_commit"]:
-        raise RunnerError(f"expected commit {values['expected_commit']} but host is {commit}")
-    run_slug, report_slug = create_active_lifecycle(values)
+    run_slug = ""
+    report_slug = ""
+    commit = ""
     ownership = runner_identity(root)
-    first_compaction = capture.apply_compaction()
-    snapshot = capture.create_snapshot(invocation_id=values["invocation_id"])
-    rows = snapshot.get("rows", [])
-    if not isinstance(rows, list):
-        raise RunnerError("snapshot rows malformed")
-    mode = values["mode"]
-    if mode == "capture_drain" and not rows:
-        raise RunnerError("mode capture_drain requested but snapshot is empty")
-    if mode == "empty_queue_enrichment" and rows:
-        raise RunnerError("mode empty_queue_enrichment requested but snapshot is non-empty")
-    if rows:
-        # The host runner deliberately fails closed for non-empty capture queues until
-        # source-specific capture skills are safely moved under the host-side critical section.
-        result = "non_empty_snapshot_requires_host_capture_extension"
-        status = "failed"
-        enrichment = None
-    else:
-        base = {
+    first_compaction: dict[str, object] | None = None
+    snapshot: dict[str, object] | None = None
+    enrichment: dict[str, object] | None = None
+    phase = "source_validation"
+    try:
+        write_phase_state(root, values, phase, extra={"request_claim": claim})
+        commit = current_commit()
+        if commit != values["expected_commit"]:
+            raise RunnerPhaseError(phase, f"expected commit {values['expected_commit']} but host is {commit}")
+
+        phase = "run_persistence"
+        write_phase_state(root, values, phase, extra={"host_commit": commit, "request_claim": claim})
+        run_slug, report_slug = create_active_lifecycle(values)
+
+        phase = "compaction_before_snapshot"
+        write_phase_state(root, values, phase, extra={"run_slug": run_slug, "report_slug": report_slug})
+        first_compaction = capture.apply_compaction()
+
+        phase = "snapshot"
+        write_phase_state(root, values, phase, extra={"first_compaction": first_compaction})
+        snapshot = capture.create_snapshot(invocation_id=values["invocation_id"])
+        rows = snapshot.get("rows", [])
+        if not isinstance(rows, list):
+            raise RunnerPhaseError(phase, "snapshot rows malformed")
+        mode = values["mode"]
+        if mode == "capture_drain" and not rows:
+            raise RunnerPhaseError(phase, "mode capture_drain requested but snapshot is empty")
+        if mode == "empty_queue_enrichment" and rows:
+            raise RunnerPhaseError(phase, "mode empty_queue_enrichment requested but snapshot is non-empty")
+        if rows:
+            result = "non_empty_snapshot_requires_host_capture_extension"
+            status = "failed"
+        else:
+            base = {
+                "host_commit": commit,
+                "runner": "host-managed-spool",
+                "task_local_network_required": False,
+                "runner_ownership": ownership,
+                "request_claim": claim,
+                "snapshot": snapshot,
+            }
+            enrichment = run_empty_queue_enrichment(root, values, run_slug, report_slug, base)
+            result = str(enrichment["result"])
+            status = "completed"
+
+        phase = "final_compaction"
+        write_phase_state(root, values, phase, extra={"result": result, "snapshot": snapshot})
+        final_compaction = capture.apply_compaction()
+        evidence = {
             "host_commit": commit,
+            "first_compaction": first_compaction,
+            "snapshot": snapshot,
+            "final_compaction": final_compaction,
             "runner": "host-managed-spool",
             "task_local_network_required": False,
             "runner_ownership": ownership,
             "request_claim": claim,
-            "snapshot": snapshot,
+            "enrichment": enrichment,
+            "progress": read_runner_state(root),
         }
-        enrichment = run_empty_queue_enrichment(values, run_slug, report_slug, base)
-        result = str(enrichment["result"])
-        status = "completed"
-    final_compaction = capture.apply_compaction()
-    evidence = {
-        "host_commit": commit,
-        "first_compaction": first_compaction,
-        "snapshot": snapshot,
-        "final_compaction": final_compaction,
-        "runner": "host-managed-spool",
-        "task_local_network_required": False,
-        "runner_ownership": ownership,
-        "request_claim": claim,
-        "enrichment": enrichment,
-    }
-    evidence = terminalize_lifecycle(values, run_slug, report_slug, status, result, evidence)
-    return terminal_result(values, status, result, evidence)
+
+        phase = "terminal_persistence"
+        write_phase_state(root, values, phase, extra={"result": result, "status": status})
+        evidence = terminalize_lifecycle(values, run_slug, report_slug, status, result, evidence)
+        write_phase_state(root, values, "tag_release", extra={"result": result, "status": status, "run_slug": run_slug, "report_slug": report_slug})
+        return terminal_result(values, status, result, evidence)
+    except Exception as exc:
+        failed_phase = exc.phase if isinstance(exc, RunnerPhaseError) else phase
+        error_result = f"{failed_phase}_failed"
+        evidence = {
+            "error": str(exc),
+            "failed_phase": failed_phase,
+            "host_commit": commit or None,
+            "first_compaction": first_compaction,
+            "snapshot": snapshot,
+            "runner": "host-managed-spool",
+            "task_local_network_required": False,
+            "runner_ownership": ownership,
+            "request_claim": claim,
+            "enrichment": enrichment,
+            "progress": read_runner_state(root),
+        }
+        if run_slug and report_slug:
+            try:
+                write_phase_state(root, values, "terminal_persistence", extra={"result": error_result, "status": "failed"})
+                evidence = terminalize_lifecycle(values, run_slug, report_slug, "failed", error_result, evidence)
+                write_phase_state(root, values, "tag_release", extra={"result": error_result, "status": "failed", "run_slug": run_slug, "report_slug": report_slug})
+            except Exception as terminal_exc:
+                evidence["terminalize_error"] = str(terminal_exc)
+        return terminal_result(values, "failed", error_result, evidence)
 
 
 def process_one(root: Path) -> dict[str, object]:
