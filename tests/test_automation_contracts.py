@@ -739,6 +739,7 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("The host runner performs compaction and `snapshot` exactly once", prompt)
         self.assertIn("Treat the terminal result file as authoritative", prompt)
         self.assertIn("Do not perform capture, enrichment, GBrain writes", prompt)
+        self.assertIn("host runner must execute the deterministic empty-queue enrichment path", prompt)
 
     def test_capture_worker_reports_host_runner_terminal_result_without_fallback(self):
         prompt = (
@@ -750,6 +751,8 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("lifecycle tag evidence", prompt)
         self.assertIn("whether task-local network was required", prompt)
         self.assertIn("do not attempt local capture as a fallback", prompt)
+        self.assertIn("runner_host_role=.85-authoritative", prompt)
+        self.assertIn("runner_enabled=true", prompt)
 
     def test_capture_worker_spool_contract_replaces_empty_queue_local_enrichment(self):
         directory = ROOT / "automations/memory-stargraph-capture-link-drain"
@@ -765,14 +768,16 @@ class AutomationContractTests(unittest.TestCase):
             "`.102` receives code with the runner disabled by default",
             "status=completed",
             "status=failed",
+            "deterministic empty-queue enrichment",
+            "no_eligible_candidate=true",
             "no fixed cutoff",
             "Product Owner notification contract",
         )
         for phrase in required:
             self.assertIn(phrase, contract)
 
-        self.assertNotIn("Select and reserve candidates", prompt)
-        self.assertNotIn("Before changing a selected entity", prompt)
+        self.assertIn("persisted/read reservation evidence before mutation", prompt)
+        self.assertIn("must not return `completed_empty_snapshot_noop`", prompt)
 
     def test_capture_worker_host_result_evidence_order(self):
         prompt = (
@@ -795,6 +800,8 @@ class AutomationContractTests(unittest.TestCase):
             "invocation id",
             "terminal status/result",
             "host commit",
+            "runner ownership evidence",
+            "enrichment/no-candidate evidence",
         )
         for phrase in required:
             self.assertIn(phrase, prompt)
@@ -810,6 +817,8 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("stale processing recovery", runbook)
         self.assertIn("MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED=1", runbook)
         self.assertIn("`.102` receives code but keeps the runner disabled", runbook)
+        self.assertIn("`completed_empty_snapshot_noop` is\nforbidden", runbook)
+        self.assertIn("submitter process context from daemon state", runbook)
 
     def test_cdp_probe_reuses_matching_tab_and_only_closes_created_tab(self):
         probe = (ROOT / "scripts" / "automation" / "cdp_probe.mjs").read_text()

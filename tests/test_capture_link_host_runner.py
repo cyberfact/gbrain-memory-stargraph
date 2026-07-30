@@ -27,6 +27,19 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
             mock.patch.object(runner, "read_tags", return_value=["capture-link", "curator", "host-runner", "completed"]),
         )
 
+    def gbrain_entity_mocks(self, pages):
+        page_store = dict(pages)
+
+        def fake_get(slug):
+            if slug not in page_store:
+                raise runner.RunnerError(f"missing {slug}")
+            return page_store[slug]
+
+        def fake_put(slug, markdown):
+            page_store[slug] = markdown
+
+        return page_store, mock.patch.object(runner, "get_entity", side_effect=fake_get), mock.patch.object(runner, "put_entity", side_effect=fake_put)
+
     def test_submit_writes_atomic_confined_request_and_status_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -116,14 +129,28 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
                 self.lifecycle_mocks()[0] as put_entity,
                 self.lifecycle_mocks()[1] as mutate_tag,
                 self.lifecycle_mocks()[2],
+                mock.patch.object(runner, "inspect_enrichment_candidates", return_value={
+                    "selection_version": runner.ENRICHMENT_SELECTION_VERSION,
+                    "inspected_scope": [],
+                    "inspected_count": 0,
+                    "candidate_count": 0,
+                    "exclusion_counts": {"not_public_or_no_reliable_public_source": 2},
+                    "ordered_candidates": [],
+                    "selected_candidates": [],
+                    "no_eligible_candidate": True,
+                }),
             ):
                 processed = runner.process_one(root)
 
             self.assertEqual(processed["status"], "processed")
             result = runner.read_status(root, "sg0176-test-0001")
             self.assertEqual(result["status"], "completed")
-            self.assertEqual(result["result"], "completed_empty_snapshot_noop")
+            self.assertEqual(result["result"], "completed_empty_snapshot_no_eligible_candidates")
+            self.assertTrue(result["evidence"]["enrichment"]["no_eligible_candidate"])
+            self.assertEqual(result["evidence"]["enrichment"]["selection"]["candidate_count"], 0)
             self.assertTrue(result["evidence"]["lifecycle_tags_released"])
+            self.assertEqual(result["evidence"]["runner_ownership"]["runner_host_role"], ".85-authoritative")
+            self.assertTrue(result["evidence"]["runner_ownership"]["configured_remote_runner_disabled"])
             self.assertIn("run_slug", result["evidence"])
             self.assertIn("report_slug", result["evidence"])
             self.assertEqual(put_entity.call_count, 3)
@@ -132,6 +159,98 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
                 mock.call("runs/memory-stargraph-capture-link-drain-sg0176-test-0001", "active", "remove"),
             ])
             self.assertTrue((root / "logs" / "runner.jsonl").exists())
+
+    def test_empty_snapshot_enriches_two_candidates_after_reservation_readback(self):
+        values = runner.validate_request(self.make_request())
+        run_slug, report_slug = runner.lifecycle_slugs(values)
+        pages, get_patch, put_patch = self.gbrain_entity_mocks({
+            run_slug: f"active {values['invocation_id']} people/a people/b",
+            "people/a": "---\ntype: person\npublic: true\n---\n# A\n\nhttps://example.com/a\n",
+            "people/b": "---\ntype: person\npublic: true\n---\n# B\n\nhttps://example.com/b\n",
+        })
+        selection = {
+            "selection_version": runner.ENRICHMENT_SELECTION_VERSION,
+            "inspected_scope": [{"type": "person", "limit": 500}],
+            "inspected_count": 2,
+            "candidate_count": 2,
+            "exclusion_counts": {},
+            "ordered_candidates": [
+                {"slug": "people/a", "type": "person", "title": "A", "deficiencies": ["missing_biography_or_summary"], "selection_order": 1},
+                {"slug": "people/b", "type": "person", "title": "B", "deficiencies": ["missing_roles_or_projects"], "selection_order": 2},
+            ],
+            "selected_candidates": [
+                {"slug": "people/a", "type": "person", "title": "A", "deficiencies": ["missing_biography_or_summary"], "selection_order": 1},
+                {"slug": "people/b", "type": "person", "title": "B", "deficiencies": ["missing_roles_or_projects"], "selection_order": 2},
+            ],
+            "no_eligible_candidate": False,
+        }
+        with (
+            get_patch,
+            put_patch as put_entity,
+            mock.patch.object(runner, "inspect_enrichment_candidates", return_value=selection),
+        ):
+            evidence = runner.run_empty_queue_enrichment(values, run_slug, report_slug, {"snapshot": {"rows": []}})
+        self.assertEqual(evidence["metrics"]["attempted_enrichments"], 2)
+        self.assertEqual(evidence["metrics"]["successful_enrichments"], 2)
+        self.assertEqual(len(evidence["reservations"]), 2)
+        self.assertIn("Capture Link Enrichment Review", pages["people/a"])
+        self.assertIn("Capture Link Enrichment Review", pages["people/b"])
+        self.assertGreaterEqual(put_entity.call_count, 4)
+
+    def test_empty_snapshot_enriches_one_candidate(self):
+        values = runner.validate_request(self.make_request())
+        run_slug, report_slug = runner.lifecycle_slugs(values)
+        pages, get_patch, put_patch = self.gbrain_entity_mocks({
+            run_slug: f"active {values['invocation_id']} people/solo",
+            "people/solo": "---\ntype: person\npublic: true\n---\n# Solo\n\nhttps://example.com/solo\n",
+        })
+        selection = {
+            "selection_version": runner.ENRICHMENT_SELECTION_VERSION,
+            "inspected_scope": [],
+            "inspected_count": 1,
+            "candidate_count": 1,
+            "exclusion_counts": {},
+            "ordered_candidates": [{"slug": "people/solo", "type": "person", "title": "Solo", "deficiencies": [], "selection_order": 1}],
+            "selected_candidates": [{"slug": "people/solo", "type": "person", "title": "Solo", "deficiencies": [], "selection_order": 1}],
+            "no_eligible_candidate": False,
+        }
+        with get_patch, put_patch, mock.patch.object(runner, "inspect_enrichment_candidates", return_value=selection):
+            evidence = runner.run_empty_queue_enrichment(values, run_slug, report_slug, {"snapshot": {"rows": []}})
+        self.assertEqual(evidence["metrics"]["attempted_enrichments"], 1)
+        self.assertEqual(evidence["metrics"]["successful_enrichments"], 1)
+        self.assertIn("people/solo", pages)
+
+    def test_zero_candidate_selection_records_deterministic_exclusions(self):
+        with (
+            mock.patch.object(runner, "list_entities", return_value=[{"slug": "people/private", "type": "person", "updated": "", "title": "Private"}]),
+            mock.patch.object(runner, "get_entity", return_value="---\ntype: person\nvisibility: private\n---\n# Private\n"),
+        ):
+            selection = runner.inspect_enrichment_candidates()
+        self.assertTrue(selection["no_eligible_candidate"])
+        self.assertEqual(selection["candidate_count"], 0)
+        self.assertEqual(selection["exclusion_counts"]["not_public_or_no_reliable_public_source"], 7)
+        self.assertEqual(selection["selection_version"], runner.ENRICHMENT_SELECTION_VERSION)
+
+    def test_enrichment_partial_failure_is_terminal_evidence(self):
+        values = runner.validate_request(self.make_request())
+        run_slug, report_slug = runner.lifecycle_slugs(values)
+        selection = {
+            "selection_version": runner.ENRICHMENT_SELECTION_VERSION,
+            "inspected_scope": [],
+            "inspected_count": 1,
+            "candidate_count": 1,
+            "exclusion_counts": {},
+            "ordered_candidates": [{"slug": "people/fail", "type": "person", "title": "Fail", "deficiencies": [], "selection_order": 1}],
+            "selected_candidates": [{"slug": "people/fail", "type": "person", "title": "Fail", "deficiencies": [], "selection_order": 1}],
+            "no_eligible_candidate": False,
+        }
+        with (
+            mock.patch.object(runner, "inspect_enrichment_candidates", return_value=selection),
+            mock.patch.object(runner, "reserve_candidate", side_effect=runner.RunnerError("reservation failed")),
+        ):
+            evidence = runner.run_empty_queue_enrichment(values, run_slug, report_slug, {"snapshot": {"rows": []}})
+        self.assertEqual(evidence["metrics"]["failed_enrichments"], 1)
+        self.assertEqual(evidence["failures"][0]["slug"], "people/fail")
 
     def test_run_loop_is_disabled_by_default_and_processes_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,6 +264,16 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
                 result = runner.run_loop(root, poll_seconds=0, max_iterations=2)
             self.assertEqual(result["iterations"], 2)
             self.assertEqual(result["processed"], 0)
+
+    def test_health_distinguishes_submitter_context_from_daemon_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner.write_runner_state(root, "idle", {"runner_enabled": True})
+            with mock.patch.dict(os.environ, {"MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED": "0"}):
+                health = runner.health(root)
+            self.assertEqual(health["context"], "submitter_offline")
+            self.assertFalse(health["current_process_runner_enabled"])
+            self.assertEqual(health["daemon_state"]["status"], "idle")
 
     def test_non_empty_snapshot_fails_closed_without_mutating_capture(self):
         with tempfile.TemporaryDirectory() as tmp:

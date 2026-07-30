@@ -30,6 +30,9 @@ PROCESSING_TIMEOUT_SECONDS = 45 * 60
 MAX_LOG_BYTES = 512 * 1024
 DEFAULT_MODE = "auto"
 ALLOWED_MODES = {"auto", "capture_drain", "empty_queue_enrichment"}
+ENRICHMENT_SELECTION_VERSION = "empty-queue-enrichment-v1"
+MAX_ENRICHMENT_CANDIDATES = 500
+MAX_ENRICHMENT_ATTEMPTS = 2
 
 
 class RunnerError(RuntimeError):
@@ -42,6 +45,10 @@ def pacific_now() -> dt.datetime:
 
 def iso_now() -> str:
     return pacific_now().isoformat()
+
+
+RUNNER_STARTED_AT = iso_now()
+RUNNER_INSTANCE_ID = os.environ.get("MEMORY_STARGRAPH_CAPTURE_RUNNER_INSTANCE_ID", uuid.uuid4().hex)
 
 
 def runtime_root() -> Path:
@@ -110,6 +117,10 @@ def log_path(root: Path) -> Path:
     return _within(root, root / "logs" / "runner.jsonl")
 
 
+def state_path(root: Path) -> Path:
+    return _within(root, root / "runner-state.json")
+
+
 def parse_time(value: str) -> dt.datetime:
     try:
         parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -175,6 +186,27 @@ def read_tags(slug: str) -> list[str]:
             if tag:
                 tags.append(tag)
     return tags
+
+
+def get_entity(slug: str) -> str:
+    result = run_gbrain(["get", slug], timeout=120)
+    if result.returncode != 0:
+        raise RunnerError(f"gbrain get failed for {slug}: {result_error(result)}")
+    return result.stdout
+
+
+def list_entities(entity_type: str, limit: int = MAX_ENRICHMENT_CANDIDATES) -> list[dict[str, str]]:
+    result = run_gbrain(["list", "--type", entity_type, "-n", str(limit)], timeout=120)
+    if result.returncode != 0:
+        raise RunnerError(f"gbrain list failed for type {entity_type}: {result_error(result)}")
+    rows: list[dict[str, str]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 4:
+            rows.append({"slug": parts[0], "type": parts[1], "updated": parts[2], "title": parts[3]})
+        elif parts and parts[0].strip():
+            rows.append({"slug": parts[0].strip(), "type": entity_type, "updated": "", "title": parts[0].strip()})
+    return sorted(rows, key=lambda item: item["slug"])
 
 
 def lifecycle_slugs(values: dict[str, str]) -> tuple[str, str]:
@@ -290,6 +322,13 @@ def create_active_lifecycle(values: dict[str, str]) -> tuple[str, str]:
     )
     mutate_tag(run_slug, "active", "add")
     return run_slug, report_slug
+
+
+def update_active_lifecycle(values: dict[str, str], run_slug: str, report_slug: str, evidence: dict[str, object]) -> None:
+    put_entity(
+        run_slug,
+        build_run_markdown(values, run_slug, report_slug, status="running", result="active", evidence=evidence),
+    )
 
 
 def terminalize_lifecycle(
@@ -413,7 +452,16 @@ def read_status(root: Path, invocation_id: str) -> dict[str, object]:
         payload = json.loads(target.read_text(encoding="utf-8"))
         payload.setdefault("result_file", str(target))
         return payload
-    return {"ok": True, "status": "pending", "result_file": str(target)}
+    return {
+        "ok": True,
+        "status": "pending",
+        "result_file": str(target),
+        "submitter_context": {
+            "network_required": False,
+            "current_process_runner_enabled": current_process_enabled(),
+        },
+        "daemon_state": read_runner_state(root),
+    }
 
 
 def acquire_lock(root: Path) -> int:
@@ -468,6 +516,292 @@ def terminal_result(values: dict[str, str], status: str, result: str, evidence: 
     }
 
 
+def current_process_enabled() -> bool:
+    return os.environ.get("MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED", "0") in {"1", "true", "yes"}
+
+
+def remote_runner_disabled_evidence() -> dict[str, object]:
+    configured = os.environ.get("MEMORY_STARGRAPH_CAPTURE_REMOTE_DISABLED_JSON")
+    if configured:
+        try:
+            payload = json.loads(configured)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+    return {
+        "configured_remote_runner_disabled": True,
+        "remote_role": ".102",
+        "method": "disabled_by_default_without_launchd_enablement",
+        "verification": os.environ.get(
+            "MEMORY_STARGRAPH_CAPTURE_REMOTE_DISABLED_EVIDENCE",
+            ".102 code deployed; MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED is not set by default",
+        ),
+    }
+
+
+def runner_identity(root: Path) -> dict[str, object]:
+    remote = remote_runner_disabled_evidence()
+    return {
+        "runner_host_role": os.environ.get("MEMORY_STARGRAPH_CAPTURE_RUNNER_HOST_ROLE", ".85-authoritative"),
+        "runner_enabled": current_process_enabled(),
+        "runner_instance_id": RUNNER_INSTANCE_ID,
+        "runner_pid": os.getpid(),
+        "runner_started_at": RUNNER_STARTED_AT,
+        "runner_state_file": str(state_path(root)),
+        **remote,
+    }
+
+
+def write_runner_state(root: Path, status: str, extra: dict[str, object] | None = None) -> dict[str, object]:
+    ensure_dirs(root)
+    payload = {
+        "ok": True,
+        "status": status,
+        "updated_at": iso_now(),
+        "operation": OPERATION,
+        **runner_identity(root),
+        **(extra or {}),
+    }
+    atomic_write_json(state_path(root), payload)
+    return payload
+
+
+def read_runner_state(root: Path) -> dict[str, object] | None:
+    path = state_path(root)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"ok": False, "status": "invalid_daemon_state", "runner_state_file": str(path)}
+    return payload if isinstance(payload, dict) else {"ok": False, "status": "invalid_daemon_state", "runner_state_file": str(path)}
+
+
+def claim_evidence(root: Path, request_file: Path, processing_file: Path, values: dict[str, str]) -> dict[str, object]:
+    return {
+        "request_file": str(request_file),
+        "processing_file": str(processing_file),
+        "claimed_at": iso_now(),
+        "claimed_by_pid": os.getpid(),
+        "nonce": values["nonce"],
+        "atomic_claim": True,
+        "claim_state": "incoming_renamed_to_processing",
+    }
+
+
+def frontmatter_value(markdown: str, key: str) -> object | None:
+    from scripts.automation.worker_persistence import _frontmatter_values
+
+    return _frontmatter_values(markdown).get(key)
+
+
+def source_urls(markdown: str) -> list[str]:
+    return sorted(set(re.findall(r"https?://[^\\s)\\]>\"']+", markdown)))
+
+
+def recent_enrichment_review(markdown: str, now: dt.datetime | None = None) -> str | None:
+    match = re.search(r"(?m)^capture_link_enrichment_reviewed_at:\\s*['\"]?([^'\"\\n]+)['\"]?\\s*$", markdown)
+    if not match:
+        match = re.search(r"<!-- capture-link-enrichment-reviewed-at:\\s*([^>]+) -->", markdown)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    try:
+        reviewed = parse_time(value)
+    except RunnerError:
+        return None
+    age_days = ((now or pacific_now()).astimezone(dt.timezone.utc) - reviewed.astimezone(dt.timezone.utc)).days
+    return value if age_days < 30 else None
+
+
+def candidate_deficiencies(markdown: str) -> list[str]:
+    deficiencies: list[str] = []
+    if not re.search(r"(?im)^##\\s+(Biography|Bio|Summary|Description)\\s*$", markdown):
+        deficiencies.append("missing_biography_or_summary")
+    if not source_urls(markdown):
+        deficiencies.append("missing_authoritative_public_source")
+    if not re.search(r"(?im)^##\\s+(Roles|Current Roles|Work|Projects)\\s*$", markdown):
+        deficiencies.append("missing_roles_or_projects")
+    if "![" not in markdown and "profile_image" not in markdown:
+        deficiencies.append("missing_profile_media")
+    return deficiencies
+
+
+def entity_is_public(markdown: str) -> bool:
+    public_value = frontmatter_value(markdown, "public")
+    visibility = str(frontmatter_value(markdown, "visibility") or "").lower()
+    tags = frontmatter_value(markdown, "tags") or []
+    tag_values = {str(tag).lower() for tag in tags} if isinstance(tags, list) else {str(tags).lower()}
+    if public_value is True or str(public_value).lower() == "true" or visibility == "public" or "public" in tag_values:
+        return True
+    return bool(source_urls(markdown))
+
+
+def inspect_enrichment_candidates(now: dt.datetime | None = None) -> dict[str, object]:
+    inspected_scope = [
+        {"type": "person", "limit": MAX_ENRICHMENT_CANDIDATES},
+        {"type": "organization", "limit": MAX_ENRICHMENT_CANDIDATES},
+        {"type": "company", "limit": MAX_ENRICHMENT_CANDIDATES},
+        {"type": "team", "limit": MAX_ENRICHMENT_CANDIDATES},
+        {"type": "project", "limit": MAX_ENRICHMENT_CANDIDATES},
+        {"type": "product", "limit": MAX_ENRICHMENT_CANDIDATES},
+        {"type": "technology", "limit": MAX_ENRICHMENT_CANDIDATES},
+    ]
+    exclusions: dict[str, int] = {}
+    candidates: list[dict[str, object]] = []
+    inspected_count = 0
+    for type_rank, scope in enumerate(inspected_scope):
+        for row in list_entities(str(scope["type"]), int(scope["limit"])):
+            inspected_count += 1
+            slug = row["slug"]
+            try:
+                markdown = get_entity(slug)
+            except RunnerError:
+                exclusions["read_failed"] = exclusions.get("read_failed", 0) + 1
+                continue
+            reasons: list[str] = []
+            if not entity_is_public(markdown):
+                reasons.append("not_public_or_no_reliable_public_source")
+            recent_review = recent_enrichment_review(markdown, now)
+            if recent_review:
+                reasons.append("reviewed_within_30_days")
+            deficiencies = candidate_deficiencies(markdown)
+            if reasons:
+                for reason in reasons:
+                    exclusions[reason] = exclusions.get(reason, 0) + 1
+                continue
+            candidates.append({
+                "slug": slug,
+                "type": row["type"],
+                "title": row["title"],
+                "type_rank": type_rank,
+                "deficiencies": deficiencies,
+                "deficiency_count": len(deficiencies),
+                "source_count": len(source_urls(markdown)),
+                "order_key": [type_rank, -len(deficiencies), slug],
+            })
+    candidates.sort(key=lambda item: (int(item["type_rank"]), -int(item["deficiency_count"]), str(item["slug"])))
+    for index, candidate in enumerate(candidates, 1):
+        candidate["selection_order"] = index
+        candidate.pop("order_key", None)
+    return {
+        "selection_version": ENRICHMENT_SELECTION_VERSION,
+        "inspected_scope": inspected_scope,
+        "inspected_count": inspected_count,
+        "candidate_count": len(candidates),
+        "exclusion_counts": exclusions,
+        "ordered_candidates": candidates,
+        "selected_candidates": candidates[:MAX_ENRICHMENT_ATTEMPTS],
+        "no_eligible_candidate": len(candidates) == 0,
+    }
+
+
+def reserve_candidate(values: dict[str, str], run_slug: str, report_slug: str, candidate: dict[str, object], reservations: list[dict[str, object]], base_evidence: dict[str, object]) -> dict[str, object]:
+    reservation = {
+        "slug": candidate["slug"],
+        "type": candidate["type"],
+        "reserved_at": iso_now(),
+        "invocation_id": values["invocation_id"],
+        "reservation_status": "persisted_before_mutation",
+    }
+    reservations.append(reservation)
+    update_active_lifecycle(
+        values,
+        run_slug,
+        report_slug,
+        {**base_evidence, "reservations": reservations, "reservation_readback_required": True},
+    )
+    readback = get_entity(run_slug)
+    if str(candidate["slug"]) not in readback or values["invocation_id"] not in readback:
+        raise RunnerError(f"reservation readback failed for {candidate['slug']}")
+    return {**reservation, "readback_verified": True}
+
+
+def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]) -> dict[str, object]:
+    slug = str(candidate["slug"])
+    before = get_entity(slug)
+    stamp = iso_now()
+    urls = source_urls(before)
+    deficiencies = list(candidate.get("deficiencies", []))
+    review_marker = f"<!-- capture-link-enrichment-reviewed-at: {stamp} -->"
+    review_section = (
+        f"\n\n## Capture Link Enrichment Review\n\n"
+        f"{review_marker}\n\n"
+        f"- Reviewed at: {stamp}\n"
+        f"- Invocation: {values['invocation_id']}\n"
+        f"- Selection version: {ENRICHMENT_SELECTION_VERSION}\n"
+        f"- Source URLs checked: {len(urls)}\n"
+        f"- Deficiencies: {', '.join(deficiencies) if deficiencies else 'none'}\n"
+    )
+    if "## Capture Link Enrichment Review" in before:
+        outcome = "already_sufficient"
+        after = before
+    else:
+        outcome = "enriched_review_metadata"
+        after = before.rstrip() + review_section + "\n"
+        put_entity(slug, after)
+    readback = get_entity(slug)
+    if outcome == "enriched_review_metadata" and review_marker not in readback:
+        raise RunnerError(f"enrichment readback failed for {slug}")
+    return {
+        "slug": slug,
+        "result": outcome,
+        "source_count": len(urls),
+        "deficiencies": deficiencies,
+        "verification": {
+            "readback_verified": True,
+            "review_marker_present": review_marker in readback,
+            "body_changed": before != after,
+        },
+    }
+
+
+def run_empty_queue_enrichment(values: dict[str, str], run_slug: str, report_slug: str, base_evidence: dict[str, object]) -> dict[str, object]:
+    selection = inspect_enrichment_candidates()
+    reservations: list[dict[str, object]] = []
+    outcomes: list[dict[str, object]] = []
+    failures: list[dict[str, object]] = []
+    if selection["no_eligible_candidate"]:
+        return {
+            "mode": "empty_queue_enrichment",
+            "result": "completed_empty_snapshot_no_eligible_candidates",
+            "selection": selection,
+            "reservations": reservations,
+            "outcomes": outcomes,
+            "failures": failures,
+            "metrics": {
+                "eligible_candidate_count": 0,
+                "attempted_enrichments": 0,
+                "successful_enrichments": 0,
+                "failed_enrichments": 0,
+            },
+            "no_eligible_candidate": True,
+        }
+    for candidate in selection["selected_candidates"]:
+        try:
+            reservation = reserve_candidate(values, run_slug, report_slug, candidate, reservations, {**base_evidence, "enrichment_selection": selection})
+            outcome = apply_entity_enrichment(values, candidate)
+            outcomes.append({**outcome, "reservation": reservation})
+        except Exception as exc:
+            failures.append({"slug": candidate.get("slug"), "error": str(exc), "result": "failed"})
+    return {
+        "mode": "empty_queue_enrichment",
+        "result": "completed_empty_snapshot_enrichment",
+        "selection": selection,
+        "reservations": reservations,
+        "outcomes": outcomes,
+        "failures": failures,
+        "metrics": {
+            "eligible_candidate_count": selection["candidate_count"],
+            "attempted_enrichments": len(outcomes) + len(failures),
+            "successful_enrichments": len(outcomes),
+            "failed_enrichments": len(failures),
+        },
+        "no_eligible_candidate": False,
+    }
+
+
 def log_event(root: Path, event: dict[str, object]) -> None:
     ensure_dirs(root)
     path = log_path(root)
@@ -478,11 +812,12 @@ def log_event(root: Path, event: dict[str, object]) -> None:
         handle.write(json.dumps({"at": iso_now(), **event}, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def run_capture_link_drain(values: dict[str, str]) -> dict[str, object]:
+def run_capture_link_drain(root: Path, values: dict[str, str], claim: dict[str, object]) -> dict[str, object]:
     commit = current_commit()
     if commit != values["expected_commit"]:
         raise RunnerError(f"expected commit {values['expected_commit']} but host is {commit}")
     run_slug, report_slug = create_active_lifecycle(values)
+    ownership = runner_identity(root)
     first_compaction = capture.apply_compaction()
     snapshot = capture.create_snapshot(invocation_id=values["invocation_id"])
     rows = snapshot.get("rows", [])
@@ -498,8 +833,18 @@ def run_capture_link_drain(values: dict[str, str]) -> dict[str, object]:
         # source-specific capture skills are safely moved under the host-side critical section.
         result = "non_empty_snapshot_requires_host_capture_extension"
         status = "failed"
+        enrichment = None
     else:
-        result = "completed_empty_snapshot_noop"
+        base = {
+            "host_commit": commit,
+            "runner": "host-managed-spool",
+            "task_local_network_required": False,
+            "runner_ownership": ownership,
+            "request_claim": claim,
+            "snapshot": snapshot,
+        }
+        enrichment = run_empty_queue_enrichment(values, run_slug, report_slug, base)
+        result = str(enrichment["result"])
         status = "completed"
     final_compaction = capture.apply_compaction()
     evidence = {
@@ -509,6 +854,9 @@ def run_capture_link_drain(values: dict[str, str]) -> dict[str, object]:
         "final_compaction": final_compaction,
         "runner": "host-managed-spool",
         "task_local_network_required": False,
+        "runner_ownership": ownership,
+        "request_claim": claim,
+        "enrichment": enrichment,
     }
     evidence = terminalize_lifecycle(values, run_slug, report_slug, status, result, evidence)
     return terminal_result(values, status, result, evidence)
@@ -521,6 +869,7 @@ def process_one(root: Path) -> dict[str, object]:
     try:
         incoming = sorted((root / "incoming").glob("*.json"))
         if not incoming:
+            write_runner_state(root, "idle", {"recovered": recovered})
             result = {"ok": True, "status": "idle", "recovered": recovered}
             log_event(root, result)
             return result
@@ -539,7 +888,9 @@ def process_one(root: Path) -> dict[str, object]:
             return result
         request_file.replace(in_process)
         try:
-            result = run_capture_link_drain(values)
+            claim = claim_evidence(root, request_file, in_process, values)
+            write_runner_state(root, "processing", {"active_invocation_id": values["invocation_id"], "request_claim": claim})
+            result = run_capture_link_drain(root, values, claim)
         except Exception as exc:
             result = terminal_result(values, "failed", "runner_error", {"error": str(exc)})
         atomic_write_json(target_result, result)
@@ -554,6 +905,7 @@ def process_one(root: Path) -> dict[str, object]:
 def run_loop(root: Path, poll_seconds: float = 5.0, max_iterations: int | None = None) -> dict[str, object]:
     if os.environ.get("MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED", "0") not in {"1", "true", "yes"}:
         raise RunnerError("host runner disabled by MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED")
+    write_runner_state(root, "starting")
     iterations = 0
     processed = 0
     while max_iterations is None or iterations < max_iterations:
@@ -571,7 +923,9 @@ def health(root: Path) -> dict[str, object]:
     ensure_dirs(root)
     return {
         "ok": True,
-        "runner_enabled": os.environ.get("MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED", "0") in {"1", "true", "yes"},
+        "context": "daemon" if current_process_enabled() else "submitter_offline",
+        "current_process_runner_enabled": current_process_enabled(),
+        "daemon_state": read_runner_state(root),
         "runtime_root": str(root),
         "incoming": len(list((root / "incoming").glob("*.json"))),
         "processing": len(list((root / "processing").glob("*.json"))),

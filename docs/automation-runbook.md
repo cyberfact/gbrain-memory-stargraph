@@ -215,6 +215,20 @@ runner exposes no arbitrary command execution, arbitrary path or slug writes,
 raw database coordinates, task-local network fallback, direct GBrain fallback,
 or approval fallback.
 
+For an empty authoritative snapshot, `completed_empty_snapshot_noop` is
+forbidden. The host runner must run deterministic empty-queue enrichment or
+terminalize with deterministic no-eligible-candidate evidence. Terminal results
+include selection version, inspected scope, candidate count, exclusion
+counts/reasons, ordered candidates, reservation persistence/readback evidence
+before entity mutation, outcomes, failures, metrics, and
+`no_eligible_candidate=true` only when the eligible candidate set is empty.
+Daemon-produced ownership evidence includes `runner_host_role=.85-authoritative`,
+`runner_enabled=true`, `runner_instance_id`, pid/start time, atomic request
+claim, and `.102` runner-disabled verification. Offline `status` and `health`
+commands must distinguish the submitter process context from daemon state so a
+submitter-side `MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED=0` cannot be mistaken
+for the authoritative `.85` daemon being disabled.
+
 ## SRE reliability and resilience
 
 `memory-stargraph-sre-daily-reliability` runs daily at 3:00 AM and
