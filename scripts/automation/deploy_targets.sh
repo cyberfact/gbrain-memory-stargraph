@@ -42,6 +42,7 @@ tracked_files=(
   public/styles.css
   public/assets/brand/yoda-selection-avatar.png
   scripts/automation/gbrain_worker_api.py
+  scripts/automation/manage_capture_backlog.py
   scripts/automation/source_sync_preflight.py
   scripts/automation/yoda_gap_evaluator.py
   tests/browser_smoke.mjs

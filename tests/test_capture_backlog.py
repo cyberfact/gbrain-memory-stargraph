@@ -5,6 +5,7 @@ import subprocess
 import sys
 import unittest
 from unittest import mock
+from urllib.parse import unquote, urlparse
 
 from scripts.automation import manage_capture_backlog as capture
 
@@ -113,6 +114,78 @@ class FakeGBrain:
                 self.links.discard(edge)
             return subprocess.CompletedProcess(args, 0, "ok", "")
         return subprocess.CompletedProcess(args, 2, "", f"unsupported command: {command}")
+
+
+class FakeWorkerApi:
+    def __init__(self, backend: FakeGBrain):
+        self.backend = backend
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(
+        self,
+        args: list[str],
+        input_text: str | None = None,
+        timeout: int = 120,
+    ) -> subprocess.CompletedProcess[str]:
+        del timeout
+        path = urlparse(args[-1]).path
+        if "-X" not in args:
+            if not path.startswith("/api/entity-raw/"):
+                return subprocess.CompletedProcess(args, 22, "", f"unsupported GET {path}")
+            slug = unquote(path.split("/api/entity-raw/", 1)[1])
+            self.calls.append(("GET", slug))
+            if slug not in self.backend.nodes:
+                return subprocess.CompletedProcess(args, 22, "", "404")
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps({"slug": slug, "content": self.backend.nodes[slug]}),
+                "",
+            )
+
+        payload = json.loads(input_text or "{}")
+        if path.startswith("/api/entity-save/"):
+            slug = unquote(path.split("/api/entity-save/", 1)[1])
+            self.calls.append(("POST_SAVE", slug))
+            self.backend.nodes[slug] = str(payload.get("content") or "")
+            return subprocess.CompletedProcess(args, 0, json.dumps({"ok": True, "slug": slug}), "")
+        if path.startswith("/api/entity-link/"):
+            source = unquote(path.split("/api/entity-link/", 1)[1])
+            target = str(payload.get("target") or "")
+            relation = str(payload.get("link_type") or "")
+            self.calls.append(("POST_LINK", f"{source}|{relation}|{target}"))
+            self.backend.links.add((source, target, relation))
+            return subprocess.CompletedProcess(args, 0, json.dumps({"ok": True}), "")
+        if path.startswith("/api/entity-unlink/"):
+            source = unquote(path.split("/api/entity-unlink/", 1)[1])
+            target = str(payload.get("target") or "")
+            relation = str(payload.get("link_type") or "")
+            self.calls.append(("POST_UNLINK", f"{source}|{relation}|{target}"))
+            self.backend.links.discard((source, target, relation))
+            return subprocess.CompletedProcess(args, 0, json.dumps({"ok": True}), "")
+        if path.startswith("/api/entity-graph-query/"):
+            source = unquote(path.split("/api/entity-graph-query/", 1)[1])
+            relation = str(payload.get("link_type") or "")
+            self.calls.append(("POST_GRAPH_QUERY", f"{source}|{relation}"))
+            lines = [
+                f"- depth 1: {edge_source} --{edge_relation}-> {edge_target} ({edge_target})"
+                for edge_source, edge_target, edge_relation in sorted(self.backend.links)
+                if edge_source == source and edge_relation == relation
+            ]
+            if not lines:
+                lines = ["No matching relationships were found in the currently loaded graph."]
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps({"ok": True, "slug": source, "output": "\n".join(lines)}),
+                "",
+            )
+        return subprocess.CompletedProcess(args, 22, "", f"unsupported POST {path}")
+
+
+def direct_gbrain_refused(args, input_text=None, timeout=180):
+    del input_text, timeout
+    return subprocess.CompletedProcess(args, 1, "", "connect ECONNREFUSED 127.0.0.1:5433")
 
 
 class CaptureBacklogTests(unittest.TestCase):
@@ -236,6 +309,22 @@ class CaptureBacklogTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result["rows"]], ["CAP-0001"])
         self.assertEqual(backend.nodes, before)
         self.assertEqual(backend.calls, [("get", capture.ROOT_SLUG)])
+
+    def test_snapshot_uses_worker_http_when_direct_gbrain_is_unavailable(self):
+        backend = FakeGBrain.with_one_request("CAP-0001", "planned")
+        api = FakeWorkerApi(backend)
+        before = dict(backend.nodes)
+        with (
+            mock.patch.object(capture, "run_gbrain", side_effect=direct_gbrain_refused),
+            mock.patch.object(capture, "run_curl", side_effect=api),
+        ):
+            result = capture.create_snapshot(NOW, invocation_id="run-http")
+
+        self.assertEqual(result["invocation_id"], "run-http")
+        self.assertEqual(result["started_at"], "2026-07-15T05:00:00-07:00")
+        self.assertEqual([row["id"] for row in result["rows"]], ["CAP-0001"])
+        self.assertEqual(backend.nodes, before)
+        self.assertEqual(api.calls, [("GET", capture.ROOT_SLUG)])
 
     def test_transition_apply_updates_parent_and_child_and_failed_collection(self):
         backend = FakeGBrain.with_one_request("CAP-0001", "capturing")
@@ -473,6 +562,23 @@ class CaptureBacklogTests(unittest.TestCase):
             backend.links,
         )
 
+    def test_compaction_apply_uses_worker_http_when_direct_gbrain_is_unavailable(self):
+        backend = FakeGBrain.with_completed_requests(50)
+        api = FakeWorkerApi(backend)
+        with (
+            mock.patch.object(capture, "run_gbrain", side_effect=direct_gbrain_refused),
+            mock.patch.object(capture, "run_curl", side_effect=api),
+        ):
+            result = capture.apply_compaction(NOW)
+
+        archive_slug = f"{capture.ARCHIVE_PREFIX}0001"
+        self.assertEqual(result["created_archives"], [archive_slug])
+        self.assertIn(archive_slug, backend.nodes)
+        self.assertEqual(capture.parse_capture_rows(backend.nodes[capture.ROOT_SLUG]), [])
+        self.assertIn(("POST_SAVE", archive_slug), api.calls)
+        self.assertIn(("POST_SAVE", capture.ROOT_SLUG), api.calls)
+        self.assertIn(("POST_LINK", f"{capture.ROOT_SLUG}|has_completed_archive|{archive_slug}"), api.calls)
+
     def test_compaction_refuses_to_overwrite_unindexed_archive(self):
         backend = FakeGBrain.with_completed_requests(50)
         archive_slug = f"{capture.ARCHIVE_PREFIX}0001"
@@ -483,6 +589,18 @@ class CaptureBacklogTests(unittest.TestCase):
                 capture.apply_compaction(NOW)
 
         self.assertEqual(backend.nodes[archive_slug], "immutable existing archive")
+
+    def test_required_read_reports_when_direct_and_worker_transports_fail(self):
+        failed_http = subprocess.CompletedProcess(["curl"], 22, "", "404")
+        with (
+            mock.patch.object(capture, "run_gbrain", side_effect=direct_gbrain_refused),
+            mock.patch.object(capture, "run_curl", return_value=failed_http),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "gbrain get and Memory Stargraph HTTP raw read failed",
+            ):
+                capture.get_required(capture.ROOT_SLUG)
 
     def test_compaction_resumes_matching_unindexed_immutable_archive(self):
         backend = FakeGBrain.with_completed_requests(50)

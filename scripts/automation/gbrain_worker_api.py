@@ -35,6 +35,20 @@ ROUTES = [
         "curl_shape": "curl -sS --fail -X POST -H 'Content-Type: application/json' -d @- <base-url>/api/entity-link/<URL-encoded-source-slug>",
     },
     {
+        "action": "remove-link",
+        "method": "POST",
+        "endpoint": "/api/entity-unlink/<URL-encoded-source-slug>",
+        "mutates_gbrain": True,
+        "curl_shape": "curl -sS --fail -X POST -H 'Content-Type: application/json' -d @- <base-url>/api/entity-unlink/<URL-encoded-source-slug>",
+    },
+    {
+        "action": "graph-query",
+        "method": "POST",
+        "endpoint": "/api/entity-graph-query/<URL-encoded-slug>",
+        "mutates_gbrain": False,
+        "curl_shape": "curl -sS --fail -X POST -H 'Content-Type: application/json' -d @- <base-url>/api/entity-graph-query/<URL-encoded-slug>",
+    },
+    {
         "action": "health",
         "method": "GET",
         "endpoint": "/api/health",
