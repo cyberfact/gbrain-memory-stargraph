@@ -38,6 +38,10 @@ class FakeStore:
         self.calls.append(("get_seed_graph", force))
         return TEST_GRAPH
 
+    def get_health_graph(self):
+        self.calls.append(("get_health_graph",))
+        return self.graph
+
     def create_entity(self, name, description="", category="entities"):
         self.calls.append(("create_entity", name, description, category))
         return "people/new-person"
@@ -218,6 +222,50 @@ class ApiEndpointTests(unittest.TestCase):
         handler.end_json = types.MethodType(end_json, handler)
         MemoryStargraphHandler.do_PUT(handler)
         return captured["status"], captured["payload"]
+
+    def test_health_uses_cached_startup_graph_without_graph_request(self):
+        fake_store = FakeStore()
+        fake_store.graph = None
+        cached = {
+            "title": "Memory Stargraph",
+            "source": {"mode": "cache", "status": "cached-startup"},
+            "stats": {"nodes": 75, "edges": 120},
+            "nodes": [],
+            "edges": [],
+        }
+
+        def health_graph():
+            fake_store.calls.append(("get_health_graph",))
+            fake_store.graph = cached
+            return cached
+
+        fake_store.get_health_graph = health_graph
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/health")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["loaded"])
+        self.assertEqual(data["source"]["status"], "cached-startup")
+        self.assertEqual(data["stats"]["nodes"], 75)
+        self.assertEqual(fake_store.calls, [("get_health_graph",)])
+
+    def test_health_preserves_unloaded_state_when_cache_unavailable(self):
+        fake_store = FakeStore()
+        fake_store.graph = None
+
+        def health_graph():
+            fake_store.calls.append(("get_health_graph",))
+            return None
+
+        fake_store.get_health_graph = health_graph
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/health")
+
+        self.assertEqual(status, 200)
+        self.assertFalse(data["loaded"])
+        self.assertIsNone(data["source"])
+        self.assertIsNone(data["stats"])
+        self.assertEqual(fake_store.calls, [("get_health_graph",)])
 
     def test_api_test_harness_marks_ask_yoda_requests_as_synthetic_tests(self):
         fake_store = FakeStore()

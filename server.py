@@ -172,7 +172,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.173"
+UI_VERSION = "V1.0.174"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -4231,6 +4231,22 @@ class GraphStore:
         self.condition = threading.Condition()
         self.yoda_context_cache = {}
 
+    def get_health_graph(self):
+        with self.condition:
+            if self.graph:
+                return self.graph
+
+        cached = cached_startup_graph()
+        if not cached:
+            return None
+
+        with self.condition:
+            if not self.graph:
+                self.graph = cached
+                self.loaded_at = time.time()
+                self.condition.notify_all()
+            return self.graph
+
     def get_graph(self, force=False):
         now = time.time()
         if force:
@@ -5736,14 +5752,15 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/gbrain-files/"):
             return self.serve_gbrain_file(parsed.path)
         if parsed.path == "/api/health":
+            graph = STORE.get_health_graph()
             return self.end_json(
                 {
                     "ok": True,
                     "title": APP_NAME,
                     "ui_version": UI_VERSION,
-                    "loaded": bool(STORE.graph),
-                    "source": STORE.graph.get("source") if STORE.graph else None,
-                    "stats": STORE.graph.get("stats") if STORE.graph else None,
+                    "loaded": bool(graph),
+                    "source": graph.get("source") if graph else None,
+                    "stats": graph.get("stats") if graph else None,
                     "attachment_storage": attachment_storage_status(),
                 }
             )

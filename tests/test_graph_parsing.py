@@ -1590,6 +1590,31 @@ cover_image: companies/example-inc/logo.jpg
         self.assertIs(graph, cached)
         collect.assert_not_called()
 
+    def test_graph_store_health_uses_cache_for_cold_startup(self):
+        store = GraphStore()
+        cached = {
+            "title": "Memory Stargraph",
+            "source": {"mode": "cache", "status": "cached-startup"},
+            "stats": {"nodes": 75, "edges": 120},
+            "nodes": [{"slug": "index", "label": "Index", "links": [], "degree": 0}],
+            "edges": [],
+        }
+        with mock.patch("server.cached_startup_graph", return_value=cached), mock.patch("server.collect_seed_graph") as collect:
+            graph = store.get_health_graph()
+
+        self.assertIs(graph, cached)
+        self.assertIs(store.graph, cached)
+        collect.assert_not_called()
+
+    def test_graph_store_health_stays_unloaded_when_cache_unavailable(self):
+        store = GraphStore()
+        with mock.patch("server.cached_startup_graph", return_value=None), mock.patch("server.collect_seed_graph") as collect:
+            graph = store.get_health_graph()
+
+        self.assertIsNone(graph)
+        self.assertIsNone(store.graph)
+        collect.assert_not_called()
+
     def test_get_entity_returns_all_direct_relationships_discovered_after_expand(self):
         store = GraphStore()
         graph = {
