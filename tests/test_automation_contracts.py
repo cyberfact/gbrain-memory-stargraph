@@ -164,9 +164,11 @@ class AutomationContractTests(unittest.TestCase):
             "scripts/automation/yoda_gap_evaluator.py",
             "scripts/automation/gbrain_worker_api.py",
             "scripts/automation/source_sync_preflight.py",
+            "scripts/automation/recurring_worker_bridge.py",
             "tests/test_yoda_gap_evaluator.py",
             "tests/test_todo_backlog_compaction.py",
             "tests/test_source_sync_preflight.py",
+            "tests/test_recurring_worker_bridge.py",
         ):
             self.assertIn(path, deploy)
 
@@ -829,6 +831,63 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("`.102` receives code but keeps the runner disabled", runbook)
         self.assertIn("`completed_empty_snapshot_noop` is\nforbidden", runbook)
         self.assertIn("submitter process context from daemon state", runbook)
+
+    def test_learning_and_sre_use_recurring_bridge_without_task_local_network(self):
+        learning = (ROOT / "automations/memory-stargraph-daily-learning-intake/prompt.md").read_text()
+        sre = (ROOT / "automations/memory-stargraph-sre/prompt.md").read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
+        contract = "\n".join((learning, sre, runbook))
+
+        for phrase in (
+            "recurring_worker_bridge.py submit",
+            "recurring_worker_bridge.py status",
+            "recurring_worker_bridge.py write-bundle",
+            "--role daily_learning_intake",
+            "--role sre_daily_reliability",
+            "--operation evidence",
+            "--operation persist",
+            "offline local-file operations",
+            "Do not use task-local curl",
+            "direct `gbrain`",
+            "PostgreSQL",
+            "approval",
+            "The .85 bridge runner is authoritative",
+            "`.102` receives code with mutation/evidence runner operations disabled by default",
+            "10-question evaluator",
+            "duplicate-policy metadata",
+            "read-only evidence",
+        ):
+            self.assertIn(phrase, contract)
+        self.assertIn("scripts/automation/recurring_worker_bridge.py", deploy)
+        self.assertIn("tests/test_recurring_worker_bridge.py", deploy)
+        self.assertNotIn("worker_persistence.py prepare", learning)
+        self.assertNotIn("worker_persistence.py prepare", sre)
+
+    def test_recurring_bridge_runbook_is_allowlisted_and_disabled_remotely(self):
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        for phrase in (
+            "strict allowlisted spool",
+            "`daily_learning_intake`",
+            "`sre_daily_reliability`",
+            "role and operation allowlists",
+            "path confinement",
+            "size limits",
+            "freshness",
+            "nonce replay/idempotence",
+            "single-runner concurrency",
+            "atomic claim/result rename",
+            "stale processing recovery",
+            "crash recovery",
+            "subprocess timeouts",
+            "phase heartbeats",
+            "Poll for up to 10 minutes",
+            "MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED=1",
+            "`.102` receives code but keeps\nLearning/SRE evidence and mutation runner operations disabled by default",
+            "no arbitrary command execution",
+            "raw database\ncoordinates",
+        ):
+            self.assertIn(phrase, runbook)
 
     def test_cdp_probe_reuses_matching_tab_and_only_closes_created_tab(self):
         probe = (ROOT / "scripts" / "automation" / "cdp_probe.mjs").read_text()

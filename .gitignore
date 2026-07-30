@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 node_modules/
 var/capture-link-runner/
+var/recurring-worker-bridge*/
 .worktrees/
 .venv/
 .playwright-cli/
