@@ -231,6 +231,20 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
         self.assertEqual(selection["exclusion_counts"]["not_public_or_no_reliable_public_source"], 7)
         self.assertEqual(selection["selection_version"], runner.ENRICHMENT_SELECTION_VERSION)
 
+    def test_candidate_inspection_is_bounded(self):
+        rows = [
+            {"slug": f"people/private-{index:02d}", "type": "person", "updated": "", "title": f"Private {index:02d}"}
+            for index in range(runner.MAX_ENRICHMENT_INSPECTIONS + 5)
+        ]
+        with (
+            mock.patch.object(runner, "list_entities", return_value=rows),
+            mock.patch.object(runner, "get_entity", return_value="---\ntype: person\nvisibility: private\n---\n# Private\n") as get_entity,
+        ):
+            selection = runner.inspect_enrichment_candidates()
+        self.assertEqual(get_entity.call_count, runner.MAX_ENRICHMENT_INSPECTIONS)
+        self.assertTrue(selection["inspection_truncated"])
+        self.assertEqual(selection["inspection_limit"], runner.MAX_ENRICHMENT_INSPECTIONS)
+
     def test_enrichment_partial_failure_is_terminal_evidence(self):
         values = runner.validate_request(self.make_request())
         run_slug, report_slug = runner.lifecycle_slugs(values)

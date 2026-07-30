@@ -33,6 +33,8 @@ ALLOWED_MODES = {"auto", "capture_drain", "empty_queue_enrichment"}
 ENRICHMENT_SELECTION_VERSION = "empty-queue-enrichment-v1"
 MAX_ENRICHMENT_CANDIDATES = 500
 MAX_ENRICHMENT_ATTEMPTS = 2
+MAX_ENRICHMENT_INSPECTIONS = 20
+ENRICHMENT_ENTITY_READ_TIMEOUT = 15
 
 
 class RunnerError(RuntimeError):
@@ -188,15 +190,15 @@ def read_tags(slug: str) -> list[str]:
     return tags
 
 
-def get_entity(slug: str) -> str:
-    result = run_gbrain(["get", slug], timeout=120)
+def get_entity(slug: str, timeout: int = 120) -> str:
+    result = run_gbrain(["get", slug], timeout=timeout)
     if result.returncode != 0:
         raise RunnerError(f"gbrain get failed for {slug}: {result_error(result)}")
     return result.stdout
 
 
 def list_entities(entity_type: str, limit: int = MAX_ENRICHMENT_CANDIDATES) -> list[dict[str, str]]:
-    result = run_gbrain(["list", "--type", entity_type, "-n", str(limit)], timeout=120)
+    result = run_gbrain(["list", "--type", entity_type, "-n", str(limit)], timeout=30)
     if result.returncode != 0:
         raise RunnerError(f"gbrain list failed for type {entity_type}: {result_error(result)}")
     rows: list[dict[str, str]] = []
@@ -651,12 +653,16 @@ def inspect_enrichment_candidates(now: dt.datetime | None = None) -> dict[str, o
     exclusions: dict[str, int] = {}
     candidates: list[dict[str, object]] = []
     inspected_count = 0
+    inspection_truncated = False
     for type_rank, scope in enumerate(inspected_scope):
         for row in list_entities(str(scope["type"]), int(scope["limit"])):
+            if inspected_count >= MAX_ENRICHMENT_INSPECTIONS:
+                inspection_truncated = True
+                break
             inspected_count += 1
             slug = row["slug"]
             try:
-                markdown = get_entity(slug)
+                markdown = get_entity(slug, timeout=ENRICHMENT_ENTITY_READ_TIMEOUT)
             except RunnerError:
                 exclusions["read_failed"] = exclusions.get("read_failed", 0) + 1
                 continue
@@ -681,6 +687,8 @@ def inspect_enrichment_candidates(now: dt.datetime | None = None) -> dict[str, o
                 "source_count": len(source_urls(markdown)),
                 "order_key": [type_rank, -len(deficiencies), slug],
             })
+        if inspection_truncated:
+            break
     candidates.sort(key=lambda item: (int(item["type_rank"]), -int(item["deficiency_count"]), str(item["slug"])))
     for index, candidate in enumerate(candidates, 1):
         candidate["selection_order"] = index
@@ -689,6 +697,8 @@ def inspect_enrichment_candidates(now: dt.datetime | None = None) -> dict[str, o
         "selection_version": ENRICHMENT_SELECTION_VERSION,
         "inspected_scope": inspected_scope,
         "inspected_count": inspected_count,
+        "inspection_limit": MAX_ENRICHMENT_INSPECTIONS,
+        "inspection_truncated": inspection_truncated,
         "candidate_count": len(candidates),
         "exclusion_counts": exclusions,
         "ordered_candidates": candidates,
