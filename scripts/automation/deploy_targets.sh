@@ -45,7 +45,6 @@ tracked_files=(
   scripts/automation/manage_capture_backlog.py
   scripts/automation/source_sync_preflight.py
   scripts/automation/worker_persistence.py
-  scripts/automation/worker_persistence.sh
   scripts/automation/yoda_gap_evaluator.py
   automations/memory-stargraph-capture-link-drain/prompt.md
   tests/browser_smoke.mjs

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Persist worker Run/report entities through the Memory Stargraph worker API.
+"""Prepare and verify worker Run/report persistence API operations.
 
 The recurring workers run in environments where direct loopback access to
-GBrain/PostgreSQL can be intermittently refused. This module keeps persistence
-on the dashboard-managed HTTP route and verifies every mutation by raw readback.
-This Python module is offline-only; `worker_persistence.sh` performs network
-transport with top-level shell curl so worker logs capture failures exactly.
+GBrain/PostgreSQL and nested network clients can be intermittently refused. This
+module is offline-only: it prepares payload files, slug encodings, deterministic
+top-level curl command lines, and semantic readback checks, but it never spawns
+network clients.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from urllib.parse import quote
 
 DEFAULT_WORKER_API_BASE_URL = "http://127.0.0.1:8788"
 DEFAULT_RETRIES = 3
+DEFAULT_OUTPUT_DIR = Path(".worker-persistence")
 
 
 class WorkerPersistenceError(RuntimeError):
@@ -153,6 +154,158 @@ def content_from_raw_payload(raw_payload: dict[str, object]) -> str:
     if not isinstance(content, str):
         raise WorkerPersistenceError("raw readback missing content")
     return content
+
+
+def _safe_slug_filename(slug: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", slug).strip("-")
+    return cleaned[:120] or "entity"
+
+
+def _preferred_non_loopback_route(config_path: Path | None = None) -> WorkerRoute:
+    records = route_records(config_path)
+    for record in records:
+        if not record["loopback"]:
+            return WorkerRoute(
+                str(record["base_url"]),
+                tuple(str(flag) for flag in record["curl_flags"]),
+                str(record["source"]),
+            )
+    raise WorkerPersistenceError("no configured non-loopback worker API route available")
+
+
+def _curl_argv(route: WorkerRoute, *args: str) -> list[str]:
+    return ["curl", "-sS", "--fail", *route.curl_flags, *args]
+
+
+def _shell(argv: list[str]) -> str:
+    return shlex.join(argv)
+
+
+def prepare_request(
+    action: str,
+    slug: str | None = None,
+    source_file: Path | None = None,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    add: list[str] | None = None,
+    remove: list[str] | None = None,
+    config_path: Path | None = None,
+    retries: int = DEFAULT_RETRIES,
+) -> dict[str, object]:
+    route = _preferred_non_loopback_route(config_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_payload: dict[str, object] = {
+        "ok": True,
+        "action": action,
+        "route": {
+            "base_url": route.base_url,
+            "curl_flags": list(route.curl_flags),
+            "source": route.source,
+            "loopback": False,
+        },
+        "transport_contract": "run each curl command explicitly as a top-level worker command; do not run this helper, Python, or a shell wrapper to perform network transport",
+        "retries": retries,
+    }
+    if action == "health":
+        argv = _curl_argv(route, "--max-time", "8", f"{route.base_url}/api/health")
+        return {
+            **base_payload,
+            "commands": [{"step": "health", "argv": argv, "shell": _shell(argv), "timeout_seconds": 8}],
+        }
+    if not slug:
+        raise WorkerPersistenceError(f"{action} requires a slug")
+    encoded = quote(slug, safe="")
+    safe = _safe_slug_filename(slug)
+    raw_output = output_dir / f"{safe}.raw.json"
+    read_argv = _curl_argv(route, "--max-time", "45", f"{route.base_url}/api/entity-raw/{encoded}", "-o", str(raw_output))
+    if action == "read":
+        return {
+            **base_payload,
+            "slug": slug,
+            "encoded_slug": encoded,
+            "raw_output_file": str(raw_output),
+            "commands": [{"step": "read_raw", "argv": read_argv, "shell": _shell(read_argv), "timeout_seconds": 45}],
+            "offline_next": {
+                "extract_content": _shell([sys.executable, "scripts/automation/worker_persistence.py", "content-from-raw", "--raw-json-file", str(raw_output)])
+            },
+        }
+    if action == "save":
+        if source_file is None:
+            raise WorkerPersistenceError("save requires --file")
+        payload_file = output_dir / f"{safe}.save-payload.json"
+        payload_file.write_text(json.dumps(save_payload(source_file), ensure_ascii=False), encoding="utf-8")
+        save_argv = _curl_argv(
+            route,
+            "--max-time",
+            "120",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            f"@{payload_file}",
+            f"{route.base_url}/api/entity-save/{encoded}",
+        )
+        verify_argv = [
+            sys.executable,
+            "scripts/automation/worker_persistence.py",
+            "verify-save",
+            "--expected-file",
+            str(source_file),
+            "--raw-json-file",
+            str(raw_output),
+            "--json",
+        ]
+        return {
+            **base_payload,
+            "slug": slug,
+            "encoded_slug": encoded,
+            "payload_file": str(payload_file),
+            "raw_output_file": str(raw_output),
+            "commands": [
+                {"step": "save", "argv": save_argv, "shell": _shell(save_argv), "timeout_seconds": 120},
+                {"step": "readback", "argv": read_argv, "shell": _shell(read_argv), "timeout_seconds": 45},
+            ],
+            "offline_verify": {"argv": verify_argv, "shell": _shell(verify_argv)},
+            "body_policy": "exact_except_one_optional_final_newline",
+        }
+    if action == "tags":
+        payload_file = output_dir / f"{safe}.tags-payload.json"
+        payload_file.write_text(json.dumps(tag_payload(add or [], remove or []), ensure_ascii=False), encoding="utf-8")
+        tags_argv = _curl_argv(
+            route,
+            "--max-time",
+            "90",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            f"@{payload_file}",
+            f"{route.base_url}/api/entity-tags/{encoded}",
+        )
+        verify_argv = [
+            sys.executable,
+            "scripts/automation/worker_persistence.py",
+            "verify-tags",
+            "--raw-json-file",
+            str(raw_output),
+            *sum((["--add", tag] for tag in add or []), []),
+            *sum((["--remove", tag] for tag in remove or []), []),
+            "--json",
+        ]
+        return {
+            **base_payload,
+            "slug": slug,
+            "encoded_slug": encoded,
+            "payload_file": str(payload_file),
+            "raw_output_file": str(raw_output),
+            "commands": [
+                {"step": "tags", "argv": tags_argv, "shell": _shell(tags_argv), "timeout_seconds": 90},
+                {"step": "readback", "argv": read_argv, "shell": _shell(read_argv), "timeout_seconds": 45},
+            ],
+            "offline_verify": {"argv": verify_argv, "shell": _shell(verify_argv)},
+        }
+    raise WorkerPersistenceError(f"unsupported prepare action: {action}")
 
 
 def _frontmatter_tags(markdown: str) -> set[str]:
@@ -375,6 +528,16 @@ def main(argv: list[str] | None = None) -> int:
     verify_tags_parser.add_argument("--remove", action="append", default=[])
     verify_tags_parser.add_argument("--json", action="store_true", dest="command_json")
 
+    prepare_parser = subparsers.add_parser("prepare", help="Prepare top-level curl command materials without network I/O.")
+    prepare_parser.add_argument("action", choices=("health", "read", "save", "tags"))
+    prepare_parser.add_argument("slug", nargs="?")
+    prepare_parser.add_argument("--file")
+    prepare_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    prepare_parser.add_argument("--add", action="append", default=[])
+    prepare_parser.add_argument("--remove", action="append", default=[])
+    prepare_parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES)
+    prepare_parser.add_argument("--json", action="store_true", dest="command_json")
+
     args = parser.parse_args(argv)
     emit_json = bool(args.json or getattr(args, "command_json", False))
     try:
@@ -400,6 +563,17 @@ def main(argv: list[str] | None = None) -> int:
             payload = verify_save_payload(Path(args.expected_file), Path(args.raw_json_file))
         elif args.command == "verify-tags":
             payload = verify_tags_payload(Path(args.raw_json_file), args.add, args.remove)
+        elif args.command == "prepare":
+            payload = prepare_request(
+                args.action,
+                slug=args.slug,
+                source_file=Path(args.file) if args.file else None,
+                output_dir=Path(args.output_dir),
+                add=args.add,
+                remove=args.remove,
+                config_path=Path(args.config).expanduser() if args.config else None,
+                retries=args.retries,
+            )
         else:
             raise AssertionError(args.command)
     except WorkerPersistenceError as exc:

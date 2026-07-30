@@ -1,9 +1,5 @@
 import json
-import os
-import stat
-import subprocess
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
 
@@ -69,6 +65,73 @@ class WorkerPersistenceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("capture-link", result["tags"])
         self.assertNotIn("active", result["tags"])
+
+    def test_prepare_save_emits_explicit_top_level_curl_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config = tmp_path / "deployment-targets.env"
+            config.write_text(
+                "MEMORY_STARGRAPH_DASHBOARD_URL='https://100.100.126.85:8788'\n"
+                "MEMORY_STARGRAPH_DASHBOARD_CURL_FLAGS='-k'\n"
+                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n",
+                encoding="utf-8",
+            )
+            source = tmp_path / "run.md"
+            source.write_text(RUN_MARKDOWN, encoding="utf-8")
+
+            prepared = persistence.prepare_request(
+                "save",
+                "runs/curator-long-run",
+                source_file=source,
+                output_dir=tmp_path / "prepared",
+                config_path=config,
+            )
+
+            self.assertTrue(prepared["ok"])
+            self.assertEqual(prepared["route"]["base_url"], "https://100.100.126.85:8788")
+            self.assertFalse(prepared["route"]["loopback"])
+            self.assertEqual(prepared["encoded_slug"], "runs%2Fcurator-long-run")
+            self.assertEqual(json.loads(Path(prepared["payload_file"]).read_text())["content"], RUN_MARKDOWN)
+            commands = prepared["commands"]
+            self.assertEqual([command["step"] for command in commands], ["save", "readback"])
+            self.assertTrue(commands[0]["argv"][0] == "curl")
+            self.assertIn("-k", commands[0]["argv"])
+            self.assertIn("-d", commands[0]["argv"])
+            self.assertIn(f"@{prepared['payload_file']}", commands[0]["argv"])
+            self.assertIn("https://100.100.126.85:8788/api/entity-save/runs%2Fcurator-long-run", commands[0]["argv"])
+            self.assertIn("curl -sS --fail -k", commands[0]["shell"])
+            self.assertIn("verify-save", prepared["offline_verify"]["shell"])
+
+    def test_prepare_tags_emits_payload_and_verifier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config = tmp_path / "deployment-targets.env"
+            config.write_text("MEMORY_STARGRAPH_DASHBOARD_URL='https://dashboard.example.test'\n", encoding="utf-8")
+
+            prepared = persistence.prepare_request(
+                "tags",
+                "runs/test-run",
+                output_dir=tmp_path / "prepared",
+                add=["completed"],
+                remove=["active", "implementing"],
+                config_path=config,
+            )
+
+            self.assertEqual(json.loads(Path(prepared["payload_file"]).read_text()), {
+                "add": ["completed"],
+                "remove": ["active", "implementing"],
+            })
+            self.assertIn("/api/entity-tags/runs%2Ftest-run", prepared["commands"][0]["shell"])
+            self.assertIn("verify-tags", prepared["offline_verify"]["shell"])
+            self.assertIn("--remove active", prepared["offline_verify"]["shell"])
+
+    def test_prepare_refuses_loopback_only_persistence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "deployment-targets.env"
+            config.write_text("MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(persistence.WorkerPersistenceError, "non-loopback"):
+                persistence.prepare_request("read", "runs/test-run", config_path=config)
 
     def test_save_accepts_canonicalized_frontmatter_order(self):
         expected = """---
@@ -193,117 +256,6 @@ tags:
 
         self.assertTrue(persistence._raw_readback_matches(expected, actual))
         self.assertFalse(persistence._raw_readback_matches(expected, extra))
-
-    def test_shell_entrypoint_uses_top_level_curl_and_preserves_payload(self):
-        root = Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            config = tmp_path / "deployment-targets.env"
-            config.write_text(
-                "MEMORY_STARGRAPH_DASHBOARD_URL='https://dashboard.example.test'\n"
-                "MEMORY_STARGRAPH_LOCAL_URL='https://127.0.0.1:8788'\n",
-                encoding="utf-8",
-            )
-            fake_bin = tmp_path / "bin"
-            fake_bin.mkdir()
-            log = tmp_path / "curl.log"
-            store = tmp_path / "store.json"
-            store.write_text("{}", encoding="utf-8")
-            curl = fake_bin / "curl"
-            curl.write_text(
-                textwrap.dedent(
-                    f"""\
-                    #!/usr/bin/env python3
-                    import json, pathlib, sys, urllib.parse
-                    log = pathlib.Path({str(log)!r})
-                    store = pathlib.Path({str(store)!r})
-                    log.write_text(log.read_text() + " ".join(sys.argv[1:]) + "\\n" if log.exists() else " ".join(sys.argv[1:]) + "\\n")
-                    args = sys.argv[1:]
-                    output = None
-                    if "-o" in args:
-                        output = pathlib.Path(args[args.index("-o") + 1])
-                    url = next(arg for arg in args if arg.startswith("http://") or arg.startswith("https://"))
-                    data = json.loads(store.read_text())
-                    def write(payload):
-                        text = json.dumps(payload)
-                        if output:
-                            output.write_text(text)
-                        else:
-                            print(text)
-                    if url.endswith("/api/health"):
-                        if "dashboard.example.test" not in url:
-                            sys.exit(7)
-                        write({{"ok": True}})
-                    elif "/api/entity-save/" in url:
-                        payload_file = args[args.index("-d") + 1][1:]
-                        slug = urllib.parse.unquote(url.split("/api/entity-save/", 1)[1])
-                        payload = json.loads(pathlib.Path(payload_file).read_text())
-                        data[slug] = payload["content"]
-                        store.write_text(json.dumps(data))
-                        write({{"ok": True, "slug": slug}})
-                    elif "/api/entity-raw/" in url:
-                        slug = urllib.parse.unquote(url.split("/api/entity-raw/", 1)[1])
-                        write({{"ok": True, "slug": slug, "content": data[slug]}})
-                    elif "/api/entity-tags/" in url:
-                        payload_file = args[args.index("-d") + 1][1:]
-                        slug = urllib.parse.unquote(url.split("/api/entity-tags/", 1)[1])
-                        payload = json.loads(pathlib.Path(payload_file).read_text())
-                        content = data[slug]
-                        for tag in payload.get("remove", []):
-                            content = content.replace(f"  - {{tag}}\\n", "")
-                        if payload.get("add") and "tags:\\n" in content:
-                            content = content.replace("tags:\\n", "tags:\\n" + "".join(f"  - {{tag}}\\n" for tag in payload["add"]), 1)
-                        data[slug] = content
-                        store.write_text(json.dumps(data))
-                        write({{"ok": True, "slug": slug}})
-                    else:
-                        sys.exit(22)
-                    """
-                ),
-                encoding="utf-8",
-            )
-            curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
-            content = tmp_path / "run.md"
-            content.write_text(RUN_MARKDOWN, encoding="utf-8")
-            env = {
-                **os.environ,
-                "PATH": f"{fake_bin}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-                "MEMORY_STARGRAPH_AUTOMATION_CONFIG": str(config),
-                "MEMORY_STARGRAPH_WORKER_API_RETRIES": "1",
-            }
-
-            save = subprocess.run(
-                ["bash", "scripts/automation/worker_persistence.sh", "save", "runs/test-run", "--file", str(content), "--json"],
-                cwd=root,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            tags = subprocess.run(
-                [
-                    "bash",
-                    "scripts/automation/worker_persistence.sh",
-                    "tags",
-                    "runs/test-run",
-                    "--remove",
-                    "active",
-                    "--add",
-                    "completed",
-                    "--json",
-                ],
-                cwd=root,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(save.returncode, 0, save.stderr)
-            self.assertEqual(tags.returncode, 0, tags.stderr)
-            self.assertTrue(json.loads(save.stdout)["ok"])
-            self.assertIn("dashboard.example.test", log.read_text())
-            self.assertNotIn("127.0.0.1:8788/api/health", log.read_text())
 
 
 if __name__ == "__main__":
