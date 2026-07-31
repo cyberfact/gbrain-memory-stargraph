@@ -105,6 +105,11 @@ try {
       newButtonOpacity: Number.parseFloat(getComputedStyle(document.querySelector(".new-node-floating")).opacity),
       newButtonText: document.querySelector("#newNodeButton")?.textContent,
       autopilotToolbarOrder: [...document.querySelectorAll("#autopilotFlyout > button, #autopilotFlyout > span")].map((item) => item.id),
+      navRailOrder: [...document.querySelectorAll(".nav-rail > .nav-rail-button")].map((item) => item.id),
+      followupsButtonCount: document.querySelectorAll("#autopilotFindingsButton").length,
+      followupsInAutopilotFlyout: Boolean(document.querySelector("#autopilotFlyout #autopilotFindingsButton")),
+      followupsButtonClass: document.querySelector("#autopilotFindingsButton")?.className,
+      followupsBadgeCount: document.querySelectorAll("#autopilotFindingsBadge").length,
       noPlannedFlightRailButton: ![...document.querySelectorAll(".nav-rail-button")].some((item) => /planned flight/i.test(item.textContent || "")),
       toolbarAboveMap: (() => {
         const toolbar = document.querySelector("#metrics")?.getBoundingClientRect();
@@ -237,10 +242,35 @@ try {
   ) {
     throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  const expectedTourOrder = ["autopilotModeIcon", "tourPlanButton", "autopilotFindingsButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
+  const expectedTourOrder = ["autopilotModeIcon", "tourPlanButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
   if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || !initial.tourPresent || !initial.noPlannedFlightRailButton || expectedTourOrder.some((id, index) => initial.autopilotToolbarOrder[index] !== id) || !initial.toolbarAboveMap || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.modalAboveMapControls) {
     throw new Error(`Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control: ${JSON.stringify(initial)}`);
   }
+  const resolverIndex = initial.navRailOrder.indexOf("navResolverButton");
+  if (
+    initial.followupsButtonCount !== 1
+    || initial.followupsBadgeCount !== 1
+    || initial.followupsInAutopilotFlyout
+    || resolverIndex < 0
+    || initial.navRailOrder[resolverIndex + 1] !== "autopilotFindingsButton"
+    || initial.navRailOrder[resolverIndex + 2] !== "navSettingsButton"
+    || !String(initial.followupsButtonClass || "").includes("nav-rail-button")
+  ) {
+    throw new Error(`Expected one Autopilot Follow-ups sidebar entry directly between Resolver and Settings: ${JSON.stringify(initial)}`);
+  }
+  await page.focus("#autopilotFindingsButton");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector("#operationModal")?.hidden && document.querySelector("#modalTitle")?.textContent === "Autopilot Follow-ups", null, { timeout: 15000 });
+  const followupsKeyboardOpen = await page.evaluate(() => ({
+    active: document.querySelector("#autopilotFindingsButton")?.classList.contains("is-active"),
+    expanded: document.querySelector("#autopilotFindingsButton")?.getAttribute("aria-expanded"),
+    modalTitle: document.querySelector("#modalTitle")?.textContent,
+  }));
+  if (!followupsKeyboardOpen.active || followupsKeyboardOpen.expanded !== "true" || followupsKeyboardOpen.modalTitle !== "Autopilot Follow-ups") {
+    throw new Error(`Expected keyboard-opened Follow-ups modal with active sidebar state: ${JSON.stringify(followupsKeyboardOpen)}`);
+  }
+  await page.click("#modalCloseButton");
+  await page.waitForFunction(() => document.querySelector("#operationModal")?.hidden, null, { timeout: 5000 });
   if (initial.metricsColumns !== 1) {
     throw new Error("Expected graph statistics to render as compact radar widget");
   }
@@ -370,7 +400,7 @@ try {
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, sg0168Slug);
   await page.waitForTimeout(2500);
-  const deepLinkIntent = await page.evaluate((previousSlug, requestedSlug) => {
+  const deepLinkIntent = await page.evaluate(({ previousSlug, requestedSlug }) => {
     const state = window.__MEMORY_STARGRAPH__.getState();
     return {
       locationSearch: location.search,
@@ -391,7 +421,7 @@ try {
         document.querySelector("#selectionSlugAlways")?.textContent || "",
       ].some((text) => text.includes(requestedSlug) || text.includes("Bound Natural Language Search Latency")),
     };
-  }, sg0162Slug, sg0168Slug);
+  }, { previousSlug: sg0162Slug, requestedSlug: sg0168Slug });
   if (
     !deepLinkIntent.locationSearch.includes(encodeURIComponent(sg0168Slug))
     || deepLinkIntent.focus !== sg0168Slug
@@ -434,7 +464,7 @@ try {
   if (
     missingDeepLink.focus !== missingDeepLinkSlug
     || !missingDeepLink.type.includes("not found")
-    || !missingDeepLink.summary.includes("No saved markdown page was found")
+    || !missingDeepLink.summary.toLowerCase().includes("no saved markdown page was found")
     || !missingDeepLink.locationSearch.includes(encodeURIComponent(missingDeepLinkSlug))
     || !missingDeepLink.slugShown.includes(missingDeepLinkSlug)
   ) {

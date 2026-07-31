@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.176";
+const UI_VERSION = "V1.0.177";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -1396,14 +1396,18 @@ function updateNavModeState() {
   const searchOpen = Boolean(searchFlyout && !searchFlyout.hidden);
   const settingsOpen = Boolean(settingsFlyout && !settingsFlyout.hidden);
   const autopilotOpen = Boolean(autopilotFlyout && !autopilotFlyout.hidden);
-  navStargraphButton?.classList.toggle("is-active", !state.tour.active && !searchOpen && !settingsOpen && !autopilotOpen);
-  navStargraphButton?.classList.toggle("is-flashing", !state.tour.active && !searchOpen && !settingsOpen && !autopilotOpen);
+  const followupsOpen = Boolean(!operationModal?.hidden && state.modalAction?.action === "autopilot-findings");
+  navStargraphButton?.classList.toggle("is-active", !state.tour.active && !searchOpen && !settingsOpen && !autopilotOpen && !followupsOpen);
+  navStargraphButton?.classList.toggle("is-flashing", !state.tour.active && !searchOpen && !settingsOpen && !autopilotOpen && !followupsOpen);
   navSearchButton?.classList.toggle("is-active", searchOpen);
   navSearchButton?.classList.toggle("is-flashing", searchOpen);
   navSettingsButton?.classList.toggle("is-active", settingsOpen);
   navSettingsButton?.classList.toggle("is-flashing", settingsOpen);
   navAutopilotButton?.classList.toggle("is-active", state.tour.active || autopilotOpen);
   navAutopilotButton?.classList.toggle("is-flashing", state.tour.active || autopilotOpen);
+  autopilotFindingsButton?.classList.toggle("is-active", followupsOpen);
+  autopilotFindingsButton?.classList.toggle("is-flashing", followupsOpen);
+  autopilotFindingsButton?.setAttribute("aria-expanded", followupsOpen ? "true" : "false");
 }
 
 function updateResponsiveSelectionPlacement() {
@@ -6166,6 +6170,7 @@ function closeModal() {
   modalAttachDescription.disabled = false;
   modalMarkdown.hidden = true;
   modalMarkdown.innerHTML = "";
+  updateNavModeState();
   modalMedia.hidden = true;
   modalMedia.innerHTML = "";
   modalChat.hidden = true;
@@ -6263,6 +6268,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     operationModal.classList.remove("compact-modal");
     setModalControlTooltips("Close", "");
     operationModal.hidden = false;
+    updateNavModeState();
     state.autopilotFindings.offset = 0;
     await loadAutopilotFindings();
     return;
@@ -7591,9 +7597,9 @@ function bindEvents() {
     showFloatingPanel(autopilotFlyout, navAutopilotButton);
     void openNodeModal("tour-plan", state.focusSlug || "");
   });
-  autopilotFindingsButton?.addEventListener("click", () => {
-    state.tour.toolbarPinned = true;
-    showFloatingPanel(autopilotFlyout, navAutopilotButton);
+  autopilotFindingsButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideFloatingPanels();
     void openNodeModal("autopilot-findings", "");
   });
   tourButton?.addEventListener("click", () => {
