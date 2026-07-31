@@ -4000,6 +4000,29 @@ body::after {
   width: 100%;
 }
 
+.search-feedback {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.search-feedback[data-mode="partial"] {
+  color: #b8f7d4;
+}
+
+.search-feedback[data-mode="warning"] {
+  color: #ffc66f;
+}
+
+.search-feedback[data-mode="success"] {
+  color: #86efac;
+}
+
 .autopilot-flyout {
   left: 96px;
   top: 108px;

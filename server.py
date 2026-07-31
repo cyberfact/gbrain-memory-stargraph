@@ -172,7 +172,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.174"
+UI_VERSION = "V1.0.175"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -3931,12 +3931,6 @@ def expand_raw_graph(raw_graph, center_slug):
 def search_raw_graph(raw_graph, query):
     started = time.monotonic()
     deadline = started + SEARCH_TOTAL_BUDGET_SECONDS
-    evidence_deadline = min(deadline, started + SEARCH_EVIDENCE_BUDGET_SECONDS)
-    evidence_results, evidence_status = evidence_record_search_results(
-        query,
-        deadline=evidence_deadline,
-        per_type_timeout=SEARCH_EVIDENCE_BUDGET_SECONDS,
-    )
     primary_status = "complete"
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -3949,6 +3943,18 @@ def search_raw_graph(raw_graph, query):
         except Exception:  # noqa: BLE001
             primary_results = []
             primary_status = "timeout"
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        evidence_results = []
+        evidence_status = "partial_timeout"
+    else:
+        evidence_budget = min(SEARCH_EVIDENCE_BUDGET_SECONDS, remaining)
+        evidence_deadline = min(deadline, time.monotonic() + evidence_budget)
+        evidence_results, evidence_status = evidence_record_search_results(
+            query,
+            deadline=evidence_deadline,
+            per_type_timeout=evidence_budget,
+        )
     loaded_results = loaded_graph_search_results(
         raw_graph,
         query,

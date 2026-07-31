@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.174";
+const UI_VERSION = "V1.0.175";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -154,6 +154,7 @@ const autopilotFlyout = document.getElementById("autopilotFlyout");
 const settingsFlyout = document.getElementById("settingsFlyout");
 const searchInput = document.getElementById("searchInput");
 const searchButton = document.getElementById("searchButton");
+const searchFeedback = document.getElementById("searchFeedback");
 const matchesOnlyToggle = document.getElementById("matchesOnlyToggle");
 const refreshButton = document.getElementById("refreshButton");
 const flowingEdgesToggle = document.getElementById("flowingEdgesToggle");
@@ -1184,15 +1185,25 @@ function setSearchLoading(active) {
   setHudTooltip(searchButton, active ? "Searching memory nodes." : "Run search and load the best matching entity.");
 }
 
+function setSearchFeedback(message, mode = "neutral") {
+  if (searchFeedback) {
+    searchFeedback.textContent = message;
+    searchFeedback.dataset.mode = mode;
+  }
+  if (hoverLabel) hoverLabel.textContent = message;
+}
+
 function reportSearchTerminalState(query, reason = "no-results") {
   const normalizedReason = reason === "timeout" ? "timed out" : "found no loaded or live result";
-  hoverLabel.textContent = `Search ${normalizedReason} for "${query}". Scope searched: exact TODO id, loaded graph, and live GBrain search when available. Try a full slug, title, tag, or summary.`;
+  setSearchFeedback(`Search ${normalizedReason} for "${query}". Scope searched: exact TODO id, loaded graph, and live GBrain search when available. Try a full slug, title, tag, or summary.`, reason === "timeout" ? "warning" : "neutral");
 }
 
 function reportSearchPartialState(query, graph) {
   const coverage = graph?.source?.coverage || {};
   const elapsed = coverage.search_elapsed_ms ? ` in ${coverage.search_elapsed_ms}ms` : "";
-  hoverLabel.textContent = `Search returned partial live evidence${elapsed} for "${query}". Scope searched: exact TODO id, loaded graph, live GBrain search, and bounded evidence ranking. Some slower evidence ranking timed out; refine the query or open the best result.`;
+  const topSlug = (coverage.search_slugs || [])[0];
+  const resultText = topSlug ? ` Top result: ${topSlug}.` : "";
+  setSearchFeedback(`Search returned partial live evidence${elapsed} for "${query}".${resultText} Scope searched: exact TODO id, loaded graph, live GBrain search, and bounded evidence ranking. Some slower evidence ranking timed out; refine the query or open the best result.`, "partial");
 }
 
 async function runLazySearch(query) {
@@ -1234,14 +1245,12 @@ async function runLazySearch(query) {
     applyGraphPayload(response.data.graph, focusSlug);
     if (partialSearch) {
       reportSearchPartialState(submittedQuery, response.data.graph);
-      if (selectionVersion === state.selectionVersion && preferredFocus && state.focusSlug === preferredFocus) {
-        loadEntity(preferredFocus, { source: "search" })
-          .catch(() => {})
-          .finally(() => {
-            if (String(state.query || "").trim() === submittedQuery) {
-              reportSearchPartialState(submittedQuery, response.data.graph);
-            }
-          });
+      if (selectionVersion === state.selectionVersion && preferredFocus) {
+        await loadEntity(preferredFocus, { source: "search" }).catch(() => {});
+        if (String(state.query || "").trim() === submittedQuery) {
+          reportSearchPartialState(submittedQuery, response.data.graph);
+          setFlyoutOpen(searchFlyout, navSearchButton, true);
+        }
       }
       return;
     }
@@ -1470,7 +1479,7 @@ function looksLikeExactSlug(value) {
 
 function reportSearchTiming(searchStartedAt) {
   const elapsed = Math.max(0, Math.round(performance.now() - searchStartedAt));
-  hoverLabel.textContent = `Search completed in ${elapsed}ms`;
+  setSearchFeedback(`Search completed in ${elapsed}ms`, "success");
 }
 
 function showSearchSelectionFromGraph(slug) {
@@ -1497,6 +1506,7 @@ function showSearchSelectionFromGraph(slug) {
   detailSecondRing.appendChild(secondRing);
   setHover(slug);
   replaceLocationSlug(slug);
+  recordSelectionHistory(slug);
 }
 
 async function tryExactSlugSearch(slug, options = {}) {
@@ -1525,7 +1535,7 @@ async function tryExactTodoIdSearch(todoId) {
     reportSearchTerminalState(todoId);
     return "terminal";
   }
-  hoverLabel.textContent = `Found ${String(todoId).trim().toUpperCase()}: ${slug}`;
+  setSearchFeedback(`Found ${String(todoId).trim().toUpperCase()}: ${slug}`, "success");
   return "loaded";
 }
 

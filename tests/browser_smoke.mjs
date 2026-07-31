@@ -1017,6 +1017,82 @@ try {
     throw new Error("Expected Parts to be removed from the statistics row");
   }
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
+  await page.route("**/api/search?q=optional%20timeout%20telemetry%20is%20not%20a%20todo", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    const coverage = payload.graph?.source?.coverage || {};
+    coverage.search_status = "partial_timeout";
+    coverage.search_primary_status = "complete";
+    coverage.search_evidence_status = "partial_timeout";
+    payload.graph.source.coverage = coverage;
+    payload.graph.source.status = "lazy-search-partial";
+    payload.graph.source.message = "Search returned within the UI budget with partial live evidence because deeper evidence ranking was slow.";
+    await route.fulfill({ response, json: payload });
+  });
+  await openSearchFlyout();
+  await page.fill("#searchInput", "optional timeout telemetry is not a todo");
+  await page.press("#searchInput", "Enter");
+  await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
+  await page.waitForFunction(() => {
+    const state = window.__MEMORY_STARGRAPH__.getState();
+    const coverage = state.graph.source?.coverage || {};
+    return coverage.last_search_query === "optional timeout telemetry is not a todo"
+      && coverage.search_status === "partial_timeout"
+      && coverage.search_primary_status === "complete"
+      && coverage.search_slugs?.length
+      && state.focusSlug === coverage.search_slugs[0];
+  }, null, { timeout: 5000 });
+  const partialTimeoutSearch = await page.evaluate(() => {
+    const state = window.__MEMORY_STARGRAPH__.getState();
+    const coverage = state.graph.source?.coverage || {};
+    const topSlug = coverage.search_slugs?.[0] || "";
+    const feedback = document.querySelector("#searchFeedback");
+    const rect = feedback?.getBoundingClientRect();
+    return {
+      query: state.query,
+      sourceStatus: state.graph.source.status,
+      searchStatus: coverage.search_status,
+      primaryStatus: coverage.search_primary_status,
+      topSlug,
+      focus: state.focusSlug,
+      listed: state.nodeMap.has(topSlug),
+      detailTitle: document.querySelector("#detailTitle")?.textContent || "",
+      feedback: feedback?.textContent || "",
+      feedbackHeight: rect?.height || 0,
+      feedbackWidth: rect?.width || 0,
+      feedbackVisible: Boolean(rect && rect.height > 0 && rect.width > 0),
+    };
+  });
+  if (
+    partialTimeoutSearch.query !== "optional timeout telemetry is not a todo"
+    || partialTimeoutSearch.searchStatus !== "partial_timeout"
+    || partialTimeoutSearch.primaryStatus !== "complete"
+    || partialTimeoutSearch.focus !== partialTimeoutSearch.topSlug
+    || !partialTimeoutSearch.topSlug.includes("optional-timeout-telemetry-is-not-a-todo")
+    || !partialTimeoutSearch.listed
+    || !partialTimeoutSearch.feedback.includes(partialTimeoutSearch.topSlug)
+    || !partialTimeoutSearch.feedback.includes("Some slower evidence ranking timed out")
+    || !partialTimeoutSearch.feedbackVisible
+  ) {
+    throw new Error(`Expected partial-timeout search to focus/list the top returned slug and show readable feedback: ${JSON.stringify(partialTimeoutSearch)}`);
+  }
+  await page.setViewportSize({ width: 390, height: 760 });
+  await page.waitForTimeout(200);
+  const mobilePartialFeedback = await page.evaluate(() => {
+    const feedback = document.querySelector("#searchFeedback");
+    const rect = feedback?.getBoundingClientRect();
+    return {
+      text: feedback?.textContent || "",
+      visible: Boolean(rect && rect.height > 0 && rect.width > 0),
+      width: rect?.width || 0,
+      height: rect?.height || 0,
+    };
+  });
+  if (!mobilePartialFeedback.visible || mobilePartialFeedback.width < 160 || !mobilePartialFeedback.text.includes("Top result:")) {
+    throw new Error(`Expected mobile partial-search feedback to remain visible and readable: ${JSON.stringify(mobilePartialFeedback)}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
   await openSearchFlyout();
   await page.fill("#searchInput", "Tony Guan");
   await page.press("#searchInput", "Enter");
@@ -1157,7 +1233,7 @@ try {
   }
 
   await page.screenshot({ path: "/private/tmp/memory-stargraph-browser.png", fullPage: true });
-  console.log(JSON.stringify({ initial, search, filters, zoom, cferSearch, expansionProbe, hover, clickPoint, afterClick, historyNav, doubleClickModal, operationModal, gbrainOperationTemplates, deleteConfirmInitial, hiddenAfterHide, hiddenAfterReload, hiddenAfterShow, rotationBefore, rotationAfter, partSearch, tonySearch, relationshipView, screenshot: "/private/tmp/memory-stargraph-browser.png" }, null, 2));
+  console.log(JSON.stringify({ initial, search, filters, zoom, cferSearch, expansionProbe, hover, clickPoint, afterClick, historyNav, doubleClickModal, operationModal, gbrainOperationTemplates, deleteConfirmInitial, hiddenAfterHide, hiddenAfterReload, hiddenAfterShow, rotationBefore, rotationAfter, partSearch, partialTimeoutSearch, mobilePartialFeedback, tonySearch, relationshipView, screenshot: "/private/tmp/memory-stargraph-browser.png" }, null, 2));
 } finally {
   await browser.close();
 }
