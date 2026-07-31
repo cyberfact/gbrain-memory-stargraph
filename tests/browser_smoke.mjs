@@ -352,6 +352,95 @@ try {
     throw new Error(`Expected repeated same-node search not to duplicate history: ${JSON.stringify(repeatedSearchHistory)}`);
   }
 
+  const sg0162Slug = "notes/memory-starmap-todo-list/reduce-recurring-ask-yoda-broad-graph-timeout-regression";
+  const sg0168Slug = "notes/memory-starmap-todo-list/bound-natural-language-search-latency-and-terminal-feedback";
+  const missingDeepLinkSlug = "notes/memory-starmap-todo-list/sg0181-missing-route-intent-smoke";
+  await openSearchFlyout();
+  await page.fill("#searchInput", "SG-0162");
+  await page.press("#searchInput", "Enter");
+  await page.waitForFunction(
+    (slug) => !document.querySelector("#searchInput")?.disabled && window.__MEMORY_STARGRAPH__.getState().focusSlug === slug,
+    sg0162Slug,
+    { timeout: 30000 },
+  );
+  await page.evaluate((slug) => {
+    const url = new URL(location.href);
+    url.searchParams.set("slug", slug);
+    history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, sg0168Slug);
+  await page.waitForTimeout(2500);
+  const deepLinkIntent = await page.evaluate((previousSlug, requestedSlug) => {
+    const state = window.__MEMORY_STARGRAPH__.getState();
+    return {
+      locationSearch: location.search,
+      focus: state.focusSlug,
+      title: document.querySelector("#detailTitle")?.textContent || "",
+      type: document.querySelector("#detailType")?.textContent || "",
+      summary: document.querySelector("#detailSummary")?.textContent || "",
+      selectionSlug: document.querySelector("#selectionSlugAlways")?.textContent || "",
+      stalePreviousVisible: [
+        document.querySelector("#detailTitle")?.textContent || "",
+        document.querySelector("#detailSummary")?.textContent || "",
+        document.querySelector("#selectionSlugAlways")?.textContent || "",
+      ].some((text) => text.includes(previousSlug)),
+      requestedVisible: [
+        state.focusSlug || "",
+        document.querySelector("#detailTitle")?.textContent || "",
+        document.querySelector("#detailSummary")?.textContent || "",
+        document.querySelector("#selectionSlugAlways")?.textContent || "",
+      ].some((text) => text.includes(requestedSlug) || text.includes("Bound Natural Language Search Latency")),
+    };
+  }, sg0162Slug, sg0168Slug);
+  if (
+    !deepLinkIntent.locationSearch.includes(encodeURIComponent(sg0168Slug))
+    || deepLinkIntent.focus !== sg0168Slug
+    || deepLinkIntent.stalePreviousVisible
+    || !deepLinkIntent.requestedVisible
+  ) {
+    throw new Error(`Expected SG-0168 route intent to beat stale SG-0162 detail within 2.5s: ${JSON.stringify(deepLinkIntent)}`);
+  }
+  await page.evaluate(() => history.back());
+  await page.waitForFunction(
+    (slug) => window.__MEMORY_STARGRAPH__.getState().focusSlug === slug && location.search.includes(encodeURIComponent(slug)),
+    sg0162Slug,
+    { timeout: 30000 },
+  );
+  await page.evaluate(() => history.forward());
+  await page.waitForFunction(
+    (slug) => window.__MEMORY_STARGRAPH__.getState().focusSlug === slug && location.search.includes(encodeURIComponent(slug)),
+    sg0168Slug,
+    { timeout: 30000 },
+  );
+  await page.evaluate((slug) => {
+    const url = new URL(location.href);
+    url.searchParams.set("slug", slug);
+    history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, missingDeepLinkSlug);
+  await page.waitForFunction(
+    (slug) => window.__MEMORY_STARGRAPH__.getState().focusSlug === slug && document.querySelector("#detailType")?.textContent?.includes("not found"),
+    missingDeepLinkSlug,
+    { timeout: 30000 },
+  );
+  const missingDeepLink = await page.evaluate((slug) => ({
+    focus: window.__MEMORY_STARGRAPH__.getState().focusSlug,
+    type: document.querySelector("#detailType")?.textContent || "",
+    title: document.querySelector("#detailTitle")?.textContent || "",
+    summary: document.querySelector("#detailSummary")?.textContent || "",
+    locationSearch: location.search,
+    slugShown: document.querySelector("#selectionSlugAlways")?.textContent || "",
+  }), missingDeepLinkSlug);
+  if (
+    missingDeepLink.focus !== missingDeepLinkSlug
+    || !missingDeepLink.type.includes("not found")
+    || !missingDeepLink.summary.includes("No saved markdown page was found")
+    || !missingDeepLink.locationSearch.includes(encodeURIComponent(missingDeepLinkSlug))
+    || !missingDeepLink.slugShown.includes(missingDeepLinkSlug)
+  ) {
+    throw new Error(`Expected missing deep-link route to preserve not-found behavior: ${JSON.stringify(missingDeepLink)}`);
+  }
+
   await openSearchFlyout();
   await page.fill("#searchInput", "tony");
   await page.press("#searchInput", "Enter");

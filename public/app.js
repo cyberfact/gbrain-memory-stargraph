@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.175";
+const UI_VERSION = "V1.0.176";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -291,6 +291,26 @@ function replaceLocationSlug(slug) {
   if (slug) url.searchParams.set("slug", slug);
   else url.searchParams.delete("slug");
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function showRequestedSelectionLoadingState(slug, requestedNode = null) {
+  state.focusSlug = slug;
+  updateAskYodaButtons();
+  detailTitle.textContent = requestedNode?.label || slug;
+  if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
+  setTimelineBadge(slug, false);
+  detailType.textContent = `${requestedNode?.category || requestedNode?.type || "entity"} · loading details`;
+  detailSummary.textContent = `Loading ${requestedNode?.label || slug} for the requested route...`;
+  renderSelectionMediaPreview([], slug);
+  detailLinks.innerHTML = "";
+  const loading = document.createElement("span");
+  loading.textContent = "Loading direct links...";
+  detailLinks.appendChild(loading);
+  detailSecondRing.innerHTML = "";
+  const secondRing = document.createElement("span");
+  secondRing.textContent = "Loading second-ring entities...";
+  detailSecondRing.appendChild(secondRing);
+  setHover(slug);
 }
 
 function hexToRgba(hex, alpha) {
@@ -7067,8 +7087,7 @@ async function loadEntity(slug, options = {}) {
     state.entityLoadId = loadId;
     const requestedNode = state.nodeMap.get(slug);
     const shouldExpand = requestedNode && !requestedNode.expanded;
-    state.focusSlug = slug;
-    updateAskYodaButtons();
+    showRequestedSelectionLoadingState(slug, requestedNode);
     if (requestedNode) {
       const directBusyLabel = `Loading direct neighbors for ${requestedNode.label || slug}`;
       setBusyOperationLabel(busyToken, directBusyLabel);
@@ -7076,20 +7095,10 @@ async function loadEntity(slug, options = {}) {
         directBusyToken = beginBusyOperation(directBusyLabel);
         setBusyOperationLabel(directBusyToken, directBusyLabel);
       }
-      detailTitle.textContent = requestedNode.label || slug;
-      if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
-      setTimelineBadge(slug, false);
       detailType.textContent = `${requestedNode.category || requestedNode.type || "entity"} · ${shouldExpand ? "loading direct links" : "loading details"}`;
       detailSummary.textContent = shouldExpand
         ? `Loading direct neighbors for ${requestedNode.label || slug}...`
         : `Loading summary for ${requestedNode.label || slug}...`;
-      renderSelectionMediaPreview([], slug);
-      detailLinks.innerHTML = "";
-      const loading = document.createElement("span");
-      loading.textContent = "Loading direct links...";
-      detailLinks.appendChild(loading);
-      detailSecondRing.innerHTML = "";
-      setHover(slug);
     }
     await ensureExpanded(slug);
     if (loadId !== state.entityLoadId) return { status: "stale", slug };
@@ -7994,7 +8003,7 @@ async function fetchGraph(endpoint = "/api/graph", options = {}) {
     }
     applyGraphPayload(graph, previousFocus);
     requestRender();
-    if (state.focusSlug) {
+    if (state.focusSlug && !options.skipFocusLoad) {
       await loadEntity(state.focusSlug, { source: "system", recordHistory: false });
     }
     return graph;
@@ -8008,6 +8017,12 @@ async function fetchHidden() {
   if (!response.ok) return;
   state.hiddenSlugs = new Set(response.data.slugs || []);
   updateHiddenList();
+}
+
+async function loadRouteSelection(options = {}) {
+  const slug = requestedSlugFromLocation();
+  if (!slug) return;
+  await loadEntity(slug, { source: "deep-link", recordHistory: false, ...options });
 }
 
 async function init() {
@@ -8030,9 +8045,9 @@ async function init() {
   await loadPersistentYodaLogs();
   await refreshAutopilotFindingsBadge();
   const requestedSlug = requestedSlugFromLocation();
-  await fetchGraph();
+  await fetchGraph("/api/graph", { preferredFocus: requestedSlug || null, skipFocusLoad: Boolean(requestedSlug) });
   if (requestedSlug) {
-    await loadEntity(requestedSlug, { source: "deep-link", recordHistory: false });
+    await loadRouteSelection();
   }
   if (!state.animationHandle) {
     requestRender();
@@ -8040,6 +8055,10 @@ async function init() {
 }
 
 void init();
+
+window.addEventListener("popstate", () => {
+  void loadRouteSelection();
+});
 
 window.__MEMORY_STARGRAPH__ = {
   getState: () => state,
