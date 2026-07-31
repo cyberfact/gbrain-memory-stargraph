@@ -55,5 +55,62 @@ class AttachmentDocumentationContractTests(unittest.TestCase):
         self.assertIn("python3 -m unittest tests.test_documentation_contracts", automation)
 
 
+class GTasksEventIngestionDocumentationContractTests(unittest.TestCase):
+    def test_canonical_gtasks_event_runbook_has_client_neutral_contract(self):
+        runbook = (ROOT / "docs" / "gtasks-event-ingestion-runbook.md").read_text(encoding="utf-8")
+        normalized_runbook = re.sub(r"\s+", " ", runbook)
+
+        required_contract = (
+            "one protected queue-ingress boundary",
+            "separately managed durable queue",
+            "There is no direct producer-to-GTasks consumer dependency",
+            '"event_id"',
+            '"idempotency_key"',
+            '"event_type"',
+            '"schema_version"',
+            '"source"',
+            '"occurred_at"',
+            '"timezone"',
+            "deterministic handler",
+            "Queue acceptance means the event is durably stored",
+            "Consumers lease messages",
+            "at-least-once delivery",
+            "Ordering and eventual consistency",
+            "dead-letter or terminal-failure",
+            "`accepted`",
+            "`duplicate`",
+            "`rejected_unknown_type`",
+            "`failed`",
+            "least privilege",
+            "Safe observability",
+            "Idempotency and restart safety",
+            "`job_applied`",
+            "commits its local application status as `Applied`",
+            "daily application-quota task",
+            "exactly once",
+            "NATS JetStream is the selected independently managed durable queue",
+            "must not roll it back, block completion, or turn it into a failed user operation",
+            "preserve the complete event in durable retry state with the same `event_id`",
+            "surface a non-blocking warning",
+            "There is no synchronous direct-to-GTasks fallback",
+        )
+        for marker in required_contract:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, normalized_runbook)
+
+        self.assertIn("Provisional NATS JetStream binding as of 2026-07-30", normalized_runbook)
+        self.assertIn("no tested JetStream binding", normalized_runbook)
+        self.assertNotRegex(runbook, re.compile(r"(?m)^(GET|POST|PUT|PATCH|DELETE)\s+/api/"))
+
+    def test_gtasks_event_runbook_is_discoverable(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        lowercase_readme = (ROOT / "readme.md").read_text(encoding="utf-8")
+        automation = (ROOT / "docs" / "automation-runbook.md").read_text(encoding="utf-8")
+
+        self.assertEqual(readme, lowercase_readme)
+        self.assertIn("docs/gtasks-event-ingestion-runbook.md", readme)
+        self.assertIn("[Unified GTasks Event Ingestion Runbook](gtasks-event-ingestion-runbook.md)", automation)
+
+
 if __name__ == "__main__":
     unittest.main()

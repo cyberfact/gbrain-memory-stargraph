@@ -756,6 +756,34 @@ REMOTE
 
 Prefer simple process tools such as `pgrep -f`, `ps -p`, `case`, and `lsof` over fragile awk regexes inside quoted SSH strings. If a command must run under zsh and uses globs, explicitly guard with `setopt nonomatch`; otherwise avoid zsh parsing entirely by using `bash -s`.
 
+## Unified GTasks Event Ingestion
+
+Client applications that report durable facts for GTasks/GBrain processing must
+follow the [Unified GTasks Event Ingestion Runbook](gtasks-event-ingestion-runbook.md).
+It defines producers, one protected queue-ingress boundary, a separately
+managed durable broker, asynchronous consumers, a strict versioned envelope,
+deterministic handler registry, enqueue and mutation idempotency, restart-safe
+leases, eventual consistency, ordering scope, terminal-failure observability,
+and retry behavior. Producers stop waiting after durable queue acceptance and
+never depend directly on the GTasks consumer. Canonical GBrain mutations occur
+only inside explicit registered handlers.
+
+The first planned event is `job_applied`. Career Path commits its local Applied
+state, publishes from a durable outbox, and waits only for durable broker
+acceptance. GTasks later consumes the event and owns canonical application,
+evidence, quota-task, and once-only progress updates. A publish failure after
+the local commit never rolls back or fails that user operation: retain the
+event with the same IDs in a durable outbox, warn without blocking, and retry
+later. Never use a synchronous direct-GTasks fallback.
+
+NATS JetStream is selected as the independent queue, while GBrain remains the
+downstream knowledge system. Local NATS service/transport, credentials,
+stream/subject and durable-consumer names, ack/retry/dead-letter/redrive policy,
+payload fields, canonical slug/relationship choices, quota-task key, and
+progress representation remain provisional until tested implementations
+publish their contracts. Do not fabricate those details or remove provisional
+labels early.
+
 ## Browser Verification
 
 Present user-facing GBrain slugs as exact-label Markdown links using `http://127.0.0.1:8788/?slug=<URL-encoded-slug>`. Before opening a browser tab, inspect existing tabs and reuse a suitable same-origin or same-source tab. Never close a reused user tab; close only a temporary tab created by the current run.

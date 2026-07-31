@@ -819,6 +819,54 @@ cover_image: companies/example-inc/logo.jpg
                 put_content,
             )
 
+    def test_graph_store_attach_file_preserves_custom_type_from_upload_side_effect(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            source = Path(tmpdir) / "toddy.jpg"
+            source.write_bytes(b"fake jpg")
+            store = GraphStore()
+            initial = "\n".join(
+                [
+                    "---",
+                    "type: agent",
+                    "title: Agent Toddy",
+                    "---",
+                    "",
+                    "# Agent Toddy",
+                    "",
+                    "Canonical agent profile.",
+                ]
+            )
+            post_upload = initial.replace("type: agent", "type: concept")
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch.object(store, "invalidate"),
+            ):
+                digest = __import__("hashlib").sha256(b"fake jpg").hexdigest()
+                run.side_effect = [
+                    initial,
+                    (
+                        f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,'
+                        f'"storage_path":"agents/toddy/toddy.jpg","filename":"toddy.jpg",'
+                        f'"size_bytes":8,"sha256":"{digest}","disposition":"uploaded"}}\n'
+                        "1 file(s):\n  agents/toddy / toddy.jpg  [8B, image/jpeg]"
+                    ),
+                    post_upload,
+                    "",
+                ]
+
+                store.attach_file("agents/toddy", str(source), "GTasks agent avatar")
+
+            put_content = next(
+                call.kwargs["input_text"]
+                for call in run.mock_calls
+                if call.args[:2] == ("put", "agents/toddy")
+            )
+            self.assertIn("type: agent", put_content)
+            self.assertNotIn("type: concept", put_content)
+
     def test_graph_store_attach_file_refuses_markdown_when_upload_fails(self):
         with TemporaryDirectory() as tmpdir:
             media_root = Path(tmpdir) / "media"

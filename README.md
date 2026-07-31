@@ -267,6 +267,7 @@ Safety:
 - `scripts/automation/` - preflight, deployment, Chrome CDP, and retrospective helpers for daily automation runs
 - `automations/` - Git-tracked prompts and portable definitions for the Memory Stargraph/GBrain learning pipeline
 - `docs/gbrain-attachment-runbook.md` - canonical attachment write, replacement, repair, evidence, cold-cache, backup/restore, and regression-prevention contract
+- `docs/gtasks-event-ingestion-runbook.md` - client-neutral producer/queue/consumer contract for durable asynchronous events and explicit GTasks handlers that write canonical GBrain facts
 - `docs/memory-stargraph-remote-gbrain-media-import-runbook.md` - remote-host topology and cache-recovery extension to the canonical attachment contract
 - `docs/automation-runbook.md` - daily automation runbook with host routes, deploy checks, and the five-minute retrospective hook
 - `docs/resolver-feedback-loop-runbook.md` - Codex/OpenClaw resolver telemetry, human approval, release distribution, nightly learning, backup, and rollback
