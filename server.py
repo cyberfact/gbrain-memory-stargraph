@@ -5359,8 +5359,21 @@ class GraphStore:
         markdown_updated = False
         copy_file_to_gbrain_store(file_path, relative_path)
         if raw and relative_path:
-            updated_raw = append_attachment_reference(raw, relative_path, description)
-            if updated_raw != raw:
+            # File upload can take long enough for another verified writer to
+            # update the page. Re-read immediately before the markdown write so
+            # an attachment never restores a stale page snapshot.
+            latest_raw_output = run_gbrain("get", slug)
+            latest_raw = (
+                latest_raw_output
+                if isinstance(latest_raw_output, str) and latest_raw_output
+                else raw
+            )
+            updated_raw = append_attachment_reference(
+                latest_raw,
+                relative_path,
+                description,
+            )
+            if updated_raw != latest_raw:
                 run_gbrain("put", slug, input_text=updated_raw)
                 markdown_updated = True
         self.invalidate()

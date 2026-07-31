@@ -751,6 +751,7 @@ cover_image: companies/example-inc/logo.jpg
                     "# Azul Systems\n\nCompany notes.",
                     f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,"storage_path":"companies/azul-systems/Azul.jpg","filename":"Azul.jpg","size_bytes":8,"sha256":"{digest}","disposition":"uploaded"}}',
                     "1 file(s):\n  companies/azul-systems / Azul.jpg  [8KB, image/jpeg]",
+                    "# Azul Systems\n\nCompany notes.",
                     "",
                 ]
                 result = store.attach_file("companies/azul-systems", str(source), "Azul company logo")
@@ -762,6 +763,61 @@ cover_image: companies/example-inc/logo.jpg
             put_content = next(call.kwargs["input_text"] for call in run.mock_calls if call.args[:2] == ("put", "companies/azul-systems"))
             self.assertIn("![Azul company logo](companies/azul-systems/Azul.jpg)", put_content)
             invalidate.assert_called_once()
+
+    def test_graph_store_attach_file_reloads_latest_page_before_markdown_write(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            source = Path(tmpdir) / "tammy.jpg"
+            source.write_bytes(b"fake jpg")
+            store = GraphStore()
+            initial = "\n".join(
+                [
+                    "---",
+                    "type: concept",
+                    "title: Agent Tammy",
+                    "---",
+                    "",
+                    "# Agent Tammy",
+                    "",
+                    "Old profile.",
+                ]
+            )
+            latest = initial.replace("type: concept", "type: agent").replace(
+                "Old profile.", "Canonical agent profile."
+            )
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch.object(store, "invalidate"),
+            ):
+                digest = __import__("hashlib").sha256(b"fake jpg").hexdigest()
+                run.side_effect = [
+                    initial,
+                    (
+                        f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,'
+                        f'"storage_path":"agents/tammy/tammy.jpg","filename":"tammy.jpg",'
+                        f'"size_bytes":8,"sha256":"{digest}","disposition":"uploaded"}}\n'
+                        "1 file(s):\n  agents/tammy / tammy.jpg  [8B, image/jpeg]"
+                    ),
+                    latest,
+                    "",
+                ]
+
+                store.attach_file("agents/tammy", str(source), "GTasks agent avatar")
+
+            put_content = next(
+                call.kwargs["input_text"]
+                for call in run.mock_calls
+                if call.args[:2] == ("put", "agents/tammy")
+            )
+            self.assertIn("type: agent", put_content)
+            self.assertIn("Canonical agent profile.", put_content)
+            self.assertNotIn("Old profile.", put_content)
+            self.assertIn(
+                "![GTasks agent avatar](agents/tammy/tammy.jpg)",
+                put_content,
+            )
 
     def test_graph_store_attach_file_refuses_markdown_when_upload_fails(self):
         with TemporaryDirectory() as tmpdir:
@@ -800,6 +856,7 @@ cover_image: companies/example-inc/logo.jpg
                 run.side_effect = [
                     "# Bridge\n\nNotes.",
                     RuntimeError("localOnly thin-client has no storage"),
+                    "# Bridge\n\nNotes.",
                     "",
                 ]
                 digest = __import__("hashlib").sha256(b"bridge jpg").hexdigest()
