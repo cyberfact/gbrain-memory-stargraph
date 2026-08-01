@@ -165,11 +165,13 @@ class AutomationContractTests(unittest.TestCase):
             "scripts/automation/gbrain_worker_api.py",
             "scripts/automation/source_sync_preflight.py",
             "scripts/automation/recurring_worker_bridge.py",
+            "scripts/automation/retrieval_quality_benchmark.py",
             "scripts/automation/com.tony.memory-stargraph.recurring-worker-bridge.plist",
             "tests/test_yoda_gap_evaluator.py",
             "tests/test_todo_backlog_compaction.py",
             "tests/test_source_sync_preflight.py",
             "tests/test_recurring_worker_bridge.py",
+            "tests/test_retrieval_quality_benchmark.py",
         ):
             self.assertIn(path, deploy)
 

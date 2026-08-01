@@ -14,6 +14,11 @@ from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.automation import retrieval_quality_benchmark
+
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 SCHEMA_VERSION = 1
@@ -493,6 +498,8 @@ def gather_learning_evidence(root: Path, values: dict[str, str]) -> dict[str, ob
         "context_status": "bounded_raw_context",
         "synthetic_acceptance": values["synthetic"] == "true",
     }
+    write_phase(root, values, "retrieval_quality_benchmark", processed=10, total=10)
+    retrieval_quality = retrieval_quality_benchmark.run_benchmark(started_at=iso_now())
     write_phase(root, values, "feedback_review")
     feedback_path = Path("data/yoda_feedback.json")
     feedback = {"path": str(feedback_path), "exists": feedback_path.exists(), "review_action": "read_only_no_mutation"}
@@ -502,6 +509,7 @@ def gather_learning_evidence(root: Path, values: dict[str, str]) -> dict[str, ob
         "health": health,
         "raw_nodes": raw_nodes,
         "evaluator": evaluator,
+        "retrieval_quality_benchmark": retrieval_quality,
         "production_feedback_review": feedback,
         "resolver_metrics": {"status": "read_only_snapshot", "proposals_applied": 0, "approval_required": False},
         "duplicate_context": {"todo_context_slugs": [TODO_PREFIX], "duplicate_policy": "update_existing_before_create"},
@@ -515,8 +523,15 @@ def gather_sre_evidence(root: Path, values: dict[str, str]) -> dict[str, object]
     write_phase(root, values, "local_health")
     health = local_health()
     write_phase(root, values, "read_only_metrics")
+    retrieval_quality = retrieval_quality_benchmark.run_benchmark(started_at=iso_now())
     metrics = {
         "latency": {"health_probe": "bounded"},
+        "retrieval_quality_baseline": {
+            "schema": retrieval_quality["schema"],
+            "summary": retrieval_quality["summary"],
+            "gate": retrieval_quality["gate"],
+            "synthetic_corpus": retrieval_quality["privacy"]["synthetic_corpus"],
+        },
         "resources": {"status": "read_only_not_mutating"},
         "storage": {"status": "read_only_not_mutating"},
         "backup": {"status": "evidence_slot_present"},

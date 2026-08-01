@@ -44,6 +44,7 @@ tracked_files=(
   scripts/automation/gbrain_worker_api.py
   scripts/automation/capture_link_host_runner.py
   scripts/automation/recurring_worker_bridge.py
+  scripts/automation/retrieval_quality_benchmark.py
   scripts/automation/com.tony.memory-stargraph.capture-link-runner.plist
   scripts/automation/com.tony.memory-stargraph.recurring-worker-bridge.plist
   scripts/automation/manage_capture_backlog.py
@@ -57,6 +58,7 @@ tracked_files=(
   tests/test_todo_backlog_compaction.py
   tests/test_capture_link_host_runner.py
   tests/test_recurring_worker_bridge.py
+  tests/test_retrieval_quality_benchmark.py
   tests/test_yoda_gap_evaluator.py
 )
 

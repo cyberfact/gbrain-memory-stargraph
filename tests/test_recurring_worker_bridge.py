@@ -55,6 +55,8 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
                 evidence = bridge.gather_learning_evidence(root, values)
             self.assertEqual(evidence["evidence_schema"], "memory-stargraph-learning-evidence-v1")
             self.assertEqual(evidence["evaluator"]["question_count"], 10)
+            self.assertEqual(evidence["retrieval_quality_benchmark"]["summary"]["question_count"], 10)
+            self.assertTrue(all(evidence["retrieval_quality_benchmark"]["gate"].values()))
             self.assertFalse(evidence["resolver_metrics"]["approval_required"])
             state = bridge.read_state(root)
             self.assertIn("heartbeat_at", state)
@@ -70,6 +72,9 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             self.assertFalse(evidence["incident_classification"]["incident"])
             self.assertFalse(evidence["incident_classification"]["remediation_attempted"])
             self.assertEqual(evidence["metrics"]["resolver"]["events_created"], 0)
+            baseline = evidence["metrics"]["retrieval_quality_baseline"]
+            self.assertEqual(baseline["summary"]["question_count"], 10)
+            self.assertTrue(all(baseline["gate"].values()))
 
     def test_decision_bundle_validates_slug_prefixes_and_todo_duplicate_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
