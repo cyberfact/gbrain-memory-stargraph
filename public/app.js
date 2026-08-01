@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.177";
+const UI_VERSION = "V1.0.178";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -7329,7 +7329,7 @@ function showMobileNodeHint(node, clientX, clientY) {
 function bindEvents() {
   navSearchButton?.addEventListener("click", (event) => {
     event.stopPropagation();
-    toggleFloatingPanel(searchFlyout, navSearchButton);
+    showFloatingPanel(searchFlyout, navSearchButton);
     if (searchFlyout && !searchFlyout.hidden) {
       window.setTimeout(() => searchInput?.focus(), 0);
     }
@@ -7358,11 +7358,6 @@ function bindEvents() {
   navResolverButton?.addEventListener("click", (event) => {
     event.stopPropagation();
     openResolverReviewModal();
-  });
-
-  navSearchButton?.addEventListener("mouseenter", () => {
-    showFloatingPanel(searchFlyout, navSearchButton);
-    window.setTimeout(() => searchInput?.focus(), 0);
   });
 
   navAutopilotButton?.addEventListener("mouseenter", () => {
