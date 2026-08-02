@@ -173,7 +173,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.182"
+UI_VERSION = "V1.0.183"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -5639,6 +5639,197 @@ def first_run_activation_funnel():
     }
 
 
+def readiness_check(check_id, label, status, summary, evidence_slugs=None, freshness="current", next_step=""):
+    return {
+        "id": check_id,
+        "label": label,
+        "status": status,
+        "summary": sanitize_text_summary(summary, 220),
+        "freshness": freshness,
+        "evidence_slugs": list(evidence_slugs or []),
+        "next_step": sanitize_text_summary(next_step, 220),
+    }
+
+
+def configured_target_readiness():
+    target_count = 0
+    if os.environ.get("MEMORY_STARGRAPH_DEPLOY_TARGETS"):
+        target_count = len([target for target in os.environ["MEMORY_STARGRAPH_DEPLOY_TARGETS"].split() if target.strip()])
+    configured_urls = os.environ.get("MEMORY_STARGRAPH_REMOTE_HEALTH_URLS") or os.environ.get("MEMORY_STARGRAPH_MONITOR_TARGETS")
+    if configured_urls:
+        target_count = max(target_count, len([item for item in configured_urls.split() if item.strip()]))
+    if target_count:
+        return "ready", {"configured_target_count": target_count}, "Configured remote target evidence is available from deployment configuration."
+    return "no_activity", {"configured_target_count": 0}, "No in-process configured-target evidence is exposed to this read-only endpoint."
+
+
+def customer_readiness():
+    graph = STORE.get_health_graph()
+    source = graph.get("source") if graph else {}
+    stats = graph.get("stats") if graph else None
+    activation = first_run_activation_funnel()
+    storage = attachment_storage_status()
+    try:
+        model_config = public_yoda_model_config()
+        model_error = ""
+    except Exception as exc:  # noqa: BLE001
+        model_config = {}
+        model_error = str(exc)
+    try:
+        weekly = memory_value_digest("week").get("verified_memory_outcomes") or {}
+        weekly_error = ""
+    except Exception as exc:  # noqa: BLE001
+        weekly = {}
+        weekly_error = str(exc)
+    try:
+        resolver = resolver_feedback_health()
+        resolver_error = ""
+    except Exception as exc:  # noqa: BLE001
+        resolver = {}
+        resolver_error = str(exc)
+    target_status, target_counts, target_summary = configured_target_readiness()
+
+    health_status = "ready" if graph and stats and source else "blocked"
+    activation_status = "ready" if activation.get("mode") == "live-ready" else "degraded"
+    model_backend = str(model_config.get("backend") or "")
+    model_status = "ready" if model_backend and not model_error else "missing"
+    if model_backend in {"openai", "openai_compatible"} and not model_config.get("api_key_available"):
+        model_status = "degraded"
+    if model_backend == "openclaw" and (model_config.get("node_runtime") or {}).get("status") not in {"ok", "not_used"}:
+        model_status = "degraded"
+    storage_status = "ready" if storage.get("available") else "blocked"
+    weekly_status = str(weekly.get("status") or "missing")
+    if weekly_status == "pass":
+        weekly_status = "ready"
+    elif weekly_status in {"partial", "missing"}:
+        weekly_status = "partial" if weekly_status == "partial" else "missing"
+    else:
+        weekly_status = "degraded"
+    resolver_pending = parse_nonnegative_int((resolver or {}).get("pending") if isinstance(resolver, dict) else 0, 0)
+    proposal_counts = (resolver or {}).get("proposal_counts") if isinstance(resolver, dict) else {}
+    if isinstance(proposal_counts, dict):
+        resolver_pending = max(resolver_pending, parse_nonnegative_int(proposal_counts.get("pending"), 0))
+    resolver_status = "missing" if resolver_error else ("degraded" if resolver_pending else "ready")
+
+    checks = [
+        readiness_check(
+            "service_health",
+            "Service health",
+            health_status,
+            "Dashboard service is loaded with non-null graph stats." if health_status == "ready" else "Dashboard service has not loaded graph health.",
+            ["/api/health"],
+            freshness="current" if health_status == "ready" else "missing",
+            next_step="Wait for health to load, then refresh the graph before using customer data.",
+        ),
+        readiness_check(
+            "activation",
+            "Activation",
+            activation_status,
+            "Live GBrain readiness is available through the activation checklist." if activation_status == "ready" else "Activation checklist still recommends sample-first setup.",
+            ["/api/activation-funnel"],
+            freshness="current",
+            next_step="Open First-run activation and complete the first incomplete setup step.",
+        ),
+        readiness_check(
+            "model_configuration",
+            "Ask Yoda model",
+            model_status,
+            "Ask Yoda has a configured model backend." if model_status == "ready" else "Ask Yoda model configuration needs attention before customer validation.",
+            ["/api/yoda-model-config"],
+            freshness="current" if not model_error else "missing",
+            next_step="Open Settings > Model and verify the configured backend without changing production data.",
+        ),
+        readiness_check(
+            "durable_storage",
+            "Durable storage",
+            storage_status,
+            "Durable attachment storage is available." if storage_status == "ready" else "Durable attachment storage is unavailable.",
+            ["/api/health"],
+            freshness="current",
+            next_step="Configure durable attachment storage before uploading customer files.",
+        ),
+        readiness_check(
+            "weekly_verified_outcomes",
+            "Weekly outcomes",
+            weekly_status,
+            "Weekly verified outcomes are passing." if weekly_status == "ready" else "Weekly verified outcomes are missing, partial, stale, or degraded.",
+            ["notes/memory-starmap-todo-list", "reports/memory-stargraph-wish-sg0187-20260802t050000-0700-8edce44"],
+            freshness=(weekly.get("freshness") or {}).get("status") or ("missing" if weekly_error else "current"),
+            next_step="Open Memory value digest and inspect the first degraded or missing weekly outcome.",
+        ),
+        readiness_check(
+            "resolver_pending",
+            "Resolver pending state",
+            resolver_status,
+            "No resolver proposals are pending." if resolver_status == "ready" else "Resolver proposals are pending or resolver evidence is unavailable.",
+            ["/api/resolver/health"],
+            freshness="current" if not resolver_error else "missing",
+            next_step="Open Resolver review and decide pending proposals manually.",
+        ),
+        readiness_check(
+            "configured_targets",
+            "Configured targets",
+            target_status,
+            target_summary,
+            ["docs/automation-runbook.md"],
+            freshness="current" if target_status == "ready" else "no_activity",
+            next_step="Run the deployment verification contract before presenting this instance as multi-target ready.",
+        ),
+    ]
+    blocked = [check for check in checks if check["status"] in {"blocked", "missing"}]
+    degraded = [check for check in checks if check["status"] in {"degraded", "partial", "stale", "no_activity"}]
+    overall_status = "blocked" if blocked else ("degraded" if degraded else "ready")
+    if blocked or degraded:
+        first_attention = (blocked or degraded)[0]
+        safe_next_step = {
+            "label": first_attention["next_step"] or "Open Memory value digest and inspect current readiness evidence.",
+            "check_id": first_attention["id"],
+            "evidence_slugs": first_attention["evidence_slugs"][:2],
+            "safe": True,
+            "mutation": False,
+            "auto_repair": False,
+        }
+    else:
+        safe_next_step = {
+            "label": "Review the customer readiness card and linked evidence before customer-facing use.",
+            "check_id": "customer_readiness",
+            "evidence_slugs": ["/api/customer-readiness", "/api/memory-value-digest?window=week"],
+            "safe": True,
+            "mutation": False,
+            "auto_repair": False,
+        }
+    return {
+        "ok": True,
+        "schema_version": 1,
+        "read_only": True,
+        "ui_version": UI_VERSION,
+        "status": overall_status,
+        "freshness": {
+            "status": "current" if not blocked else "partial",
+            "source": "bounded_read_only_runtime_evidence",
+        },
+        "summary_counts": {
+            "checks_total": len(checks),
+            "ready": sum(1 for check in checks if check["status"] == "ready"),
+            "degraded": sum(1 for check in checks if check["status"] == "degraded"),
+            "blocked": sum(1 for check in checks if check["status"] == "blocked"),
+            "missing": sum(1 for check in checks if check["status"] == "missing"),
+            "partial": sum(1 for check in checks if check["status"] == "partial"),
+            "no_activity": sum(1 for check in checks if check["status"] == "no_activity"),
+        },
+        "checks": checks,
+        "safe_next_step": safe_next_step,
+        "evidence_slugs": sorted({slug for check in checks for slug in check["evidence_slugs"]}),
+        "target_evidence": target_counts,
+        "privacy": "Aggregate statuses and evidence slugs only; private snippets, secrets, prompt text, host-private paths, and concrete target coordinates are withheld.",
+        "prohibited_actions": {
+            "auto_repair": False,
+            "resolver_auto_approval": False,
+            "production_mutation": False,
+        },
+    }
+
+
 def safe_gbrain_get_text(slug):
     try:
         return run_gbrain("get", slug, timeout=20)
@@ -6173,6 +6364,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/memory-value-digest":
             query = parse_qs(parsed.query)
             return self.end_json(memory_value_digest((query.get("window") or ["day"])[0]))
+        if parsed.path == "/api/customer-readiness":
+            return self.end_json(customer_readiness())
         if parsed.path == "/api/graph":
             graph = STORE.get_seed_graph()
             return self.end_json(graph)

@@ -1130,6 +1130,103 @@ class ApiEndpointTests(unittest.TestCase):
             self.assertEqual(gate["counts"]["invalid_supersession"], 1 if "supersession" in reason or "cyclic" in reason else 0)
             self.assertIn(reason, outcomes["historical_failures"][0]["reason"])
 
+    def test_customer_readiness_is_read_only_and_exposes_one_safe_next_step(self):
+        fake_store = FakeStore()
+        weekly = {
+            "verified_memory_outcomes": {
+                "status": "pass",
+                "freshness": {"status": "current"},
+                "summary_counts": {"gates_passed": 7, "gates_total": 7},
+            }
+        }
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.setup_diagnostics", return_value={"status": "ready"}),
+            mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
+            mock.patch("server.attachment_storage_status", return_value={"available": True}),
+            mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
+            mock.patch("server.memory_value_digest", return_value=weekly),
+            mock.patch("server.resolver_feedback_health", return_value={"pending": 0, "proposal_counts": {"pending": 0}}),
+            mock.patch(
+                "server.configured_target_readiness",
+                return_value=("ready", {"configured_target_count": 1}, "Configured target evidence is available."),
+            ),
+        ):
+            status, data = self.dispatch_get("/api/customer-readiness")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["read_only"])
+        self.assertEqual(data["schema_version"], 1)
+        self.assertEqual(data["status"], "ready")
+        self.assertEqual(data["summary_counts"]["checks_total"], 7)
+        self.assertEqual(data["summary_counts"]["ready"], 7)
+        self.assertIsInstance(data["safe_next_step"], dict)
+        self.assertTrue(data["safe_next_step"]["safe"])
+        self.assertFalse(data["safe_next_step"]["mutation"])
+        self.assertFalse(data["safe_next_step"]["auto_repair"])
+        self.assertEqual(data["prohibited_actions"], {
+            "auto_repair": False,
+            "resolver_auto_approval": False,
+            "production_mutation": False,
+        })
+        self.assertEqual({check["id"] for check in data["checks"]}, {
+            "service_health",
+            "activation",
+            "model_configuration",
+            "durable_storage",
+            "weekly_verified_outcomes",
+            "resolver_pending",
+            "configured_targets",
+        })
+        serialized = json.dumps(data).lower()
+        self.assertIn("notes/memory-starmap-todo-list", serialized)
+        self.assertNotIn("/users/", serialized)
+        self.assertNotIn("api_key", serialized)
+        self.assertNotIn("sk-", serialized)
+        self.assertNotIn("authorization", serialized)
+        self.assertNotIn("raw prompt", serialized)
+
+    def test_customer_readiness_reports_degraded_missing_partial_and_no_activity(self):
+        fake_store = FakeStore()
+        weekly = {
+            "verified_memory_outcomes": {
+                "status": "partial",
+                "freshness": {"status": "partial"},
+                "summary_counts": {"gates_passed": 4, "gates_total": 7},
+            }
+        }
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.setup_diagnostics", return_value={"status": "ready"}),
+            mock.patch("server.first_run_activation_funnel", return_value={"mode": "sample-first"}),
+            mock.patch("server.attachment_storage_status", return_value={"available": False}),
+            mock.patch("server.public_yoda_model_config", side_effect=RuntimeError("redacted failure")),
+            mock.patch("server.memory_value_digest", return_value=weekly),
+            mock.patch("server.resolver_feedback_health", return_value={"proposal_counts": {"pending": 2}}),
+            mock.patch(
+                "server.configured_target_readiness",
+                return_value=("no_activity", {"configured_target_count": 0}, "No target evidence is available."),
+            ),
+        ):
+            status, data = self.dispatch_get("/api/customer-readiness")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["status"], "blocked")
+        self.assertEqual(data["summary_counts"]["blocked"], 1)
+        self.assertEqual(data["summary_counts"]["missing"], 1)
+        self.assertEqual(data["summary_counts"]["partial"], 1)
+        self.assertEqual(data["summary_counts"]["no_activity"], 1)
+        checks = {check["id"]: check for check in data["checks"]}
+        self.assertEqual(checks["durable_storage"]["status"], "blocked")
+        self.assertEqual(checks["model_configuration"]["status"], "missing")
+        self.assertEqual(checks["weekly_verified_outcomes"]["status"], "partial")
+        self.assertEqual(checks["configured_targets"]["status"], "no_activity")
+        self.assertEqual(data["safe_next_step"]["check_id"], "model_configuration")
+        serialized = json.dumps(data).lower()
+        self.assertNotIn("redacted failure", serialized)
+        self.assertNotIn("/users/", serialized)
+
     def test_take_proposals_endpoint_bounds_filters_and_returns_counts(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):

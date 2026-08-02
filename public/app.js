@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.182";
+const UI_VERSION = "V1.0.183";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -240,6 +240,7 @@ const activationFunnelButton = document.getElementById("activationFunnelButton")
 const settingsDiagnosticsButton = document.getElementById("settingsDiagnosticsButton");
 const sampleBrainButton = document.getElementById("sampleBrainButton");
 const memoryDigestButton = document.getElementById("memoryDigestButton");
+const customerReadinessButton = document.getElementById("customerReadinessButton");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -4122,6 +4123,55 @@ function renderVerifiedMemoryOutcomesCard(digest) {
   return card;
 }
 
+function renderCustomerReadinessCard(data) {
+  const card = document.createElement("section");
+  card.className = "customer-readiness-card";
+  card.setAttribute("aria-label", "Customer readiness");
+
+  const header = document.createElement("div");
+  header.className = "customer-readiness-header";
+  const titleWrap = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = "Customer readiness";
+  const subtitle = document.createElement("p");
+  const counts = data?.summary_counts || {};
+  subtitle.textContent = `${counts.ready ?? 0}/${counts.checks_total ?? 0} checks ready · ${outcomeStatusLabel(data?.status)}`;
+  titleWrap.append(title, subtitle);
+  const status = document.createElement("span");
+  status.className = `customer-readiness-status is-${String(data?.status || "unknown").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "unknown"}`;
+  status.textContent = outcomeStatusLabel(data?.status);
+  header.append(titleWrap, status);
+  card.appendChild(header);
+
+  const grid = document.createElement("div");
+  grid.className = "customer-readiness-grid";
+  (data?.checks || []).forEach((check) => {
+    const item = document.createElement("article");
+    item.className = `customer-readiness-item is-${String(check.status || "unknown").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "unknown"}`;
+    const checkTitle = document.createElement("h4");
+    checkTitle.textContent = check.label || check.id || "Readiness check";
+    const meta = document.createElement("p");
+    const evidenceCount = Array.isArray(check.evidence_slugs) ? check.evidence_slugs.length : 0;
+    meta.textContent = `${outcomeStatusLabel(check.status)} · ${outcomeStatusLabel(check.freshness)} · ${evidenceCount} evidence link${evidenceCount === 1 ? "" : "s"}`;
+    const summary = document.createElement("p");
+    summary.textContent = check.summary || "No summary available.";
+    item.append(checkTitle, meta, summary);
+    grid.appendChild(item);
+  });
+  card.appendChild(grid);
+
+  const next = document.createElement("p");
+  next.className = "customer-readiness-next-step";
+  next.textContent = `Safe next step: ${data?.safe_next_step?.label || "Review readiness evidence without mutating production data."}`;
+  card.appendChild(next);
+
+  const footer = document.createElement("p");
+  footer.className = "customer-readiness-privacy";
+  footer.textContent = data?.privacy || "Aggregate evidence only; private content is withheld.";
+  card.appendChild(footer);
+  return card;
+}
+
 async function openMemoryDigestWindow() {
   hideFloatingPanels();
   modalKicker.textContent = "Memory value";
@@ -4152,6 +4202,40 @@ async function openMemoryDigestWindow() {
     modalMarkdown.appendChild(pre);
   } else {
     pre.textContent = `Memory value digest unavailable: ${response.data?.error || response.status}`;
+    modalMarkdown.appendChild(pre);
+  }
+}
+
+async function openCustomerReadinessWindow() {
+  hideFloatingPanels();
+  modalKicker.textContent = "Readiness";
+  modalTitle.textContent = "Customer readiness";
+  modalMessage.textContent = "Read-only readiness from health, activation, model, storage, weekly outcomes, resolver, and target evidence.";
+  modalPrimaryButton.textContent = "Close";
+  modalCloseButton.setAttribute("aria-label", "Close customer readiness");
+  modalPrimaryButton.hidden = false;
+  modalCancelButton.hidden = true;
+  modalEditor.hidden = true;
+  modalChat.hidden = true;
+  modalForm.hidden = true;
+  modalMarkdown.hidden = false;
+  modalMarkdown.innerHTML = "";
+  const loading = document.createElement("p");
+  loading.className = "modal-loading-state";
+  loading.textContent = "Loading customer readiness...";
+  modalMarkdown.appendChild(loading);
+  operationModal.hidden = false;
+  state.modalAction = { action: "customer-readiness", slug: "notes/memory-starmap-todo-list/add-a-customer-readiness-and-safe-next-step-card", label: "Customer readiness" };
+  const response = await apiGet("/api/customer-readiness");
+  const pre = document.createElement("pre");
+  pre.className = "yoda-log-window";
+  modalMarkdown.innerHTML = "";
+  if (response.ok) {
+    modalMarkdown.appendChild(renderCustomerReadinessCard(response.data || {}));
+    pre.textContent = JSON.stringify(response.data, null, 2);
+    modalMarkdown.appendChild(pre);
+  } else {
+    pre.textContent = `Customer readiness unavailable: ${response.data?.error || response.status}`;
     modalMarkdown.appendChild(pre);
   }
 }
@@ -7502,6 +7586,9 @@ function bindEvents() {
   });
   memoryDigestButton?.addEventListener("click", () => {
     void openMemoryDigestWindow();
+  });
+  customerReadinessButton?.addEventListener("click", () => {
+    void openCustomerReadinessWindow();
   });
   resolverReviewCloseButton?.addEventListener("click", closeResolverReviewModal);
   resolverRefreshButton?.addEventListener("click", () => {
