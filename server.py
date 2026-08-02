@@ -173,7 +173,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.181"
+UI_VERSION = "V1.0.182"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -5658,6 +5658,155 @@ def count_todo_statuses(markdown):
     return counts
 
 
+def parse_todo_table_rows(markdown):
+    rows = []
+    for line in str(markdown or "").splitlines():
+        if not line.startswith("| SG-"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 7:
+            continue
+        node_match = re.search(r"\[\[([^\]]+)\]\]", cells[4])
+        rows.append(
+            {
+                "id": cells[0],
+                "status": cells[1],
+                "priority": cells[2],
+                "title": cells[3],
+                "node": node_match.group(1) if node_match else "",
+                "updated": cells[5],
+                "notes": sanitize_text_summary(cells[6], 260),
+            }
+        )
+    return rows
+
+
+def listify_frontmatter_value(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def supersession_metadata(meta):
+    target_slug = (
+        str(meta.get("superseded_by") or meta.get("superseding_todo_slug") or "")
+        .strip()
+        .strip("'\"")
+    )
+    target_id = str(meta.get("superseded_by_todo_id") or meta.get("superseding_todo_id") or "").strip()
+    evidence_slugs = listify_frontmatter_value(meta.get("supersession_evidence"))
+    return target_slug, target_id, evidence_slugs
+
+
+def evaluate_failed_todo_supersession(row, row_markdown_cache=None):
+    row_slug = row.get("node") or ""
+    result = {
+        "todo_id": row.get("id") or "",
+        "slug": row_slug,
+        "title": row.get("title") or "",
+        "status": "not_superseded",
+        "current_blocker": True,
+        "superseded_by": "",
+        "superseded_by_todo_id": "",
+        "evidence_slugs": [],
+        "reason": "no explicit structured supersession metadata",
+    }
+    if not row_slug:
+        result["reason"] = "failed row has no child node slug"
+        return result
+    source_text = (row_markdown_cache or {}).get(row_slug)
+    if source_text is None:
+        source_text = safe_gbrain_get_text(row_slug)
+    if not source_text or str(source_text).startswith("unavailable:"):
+        result["reason"] = "failed child node is unavailable"
+        return result
+    source_meta, _body = parse_frontmatter(source_text)
+    target_slug, target_id, evidence_slugs = supersession_metadata(source_meta)
+    result["superseded_by"] = target_slug
+    result["superseded_by_todo_id"] = target_id
+    result["evidence_slugs"] = evidence_slugs
+    if not target_slug:
+        return result
+    if target_slug == row_slug:
+        result["status"] = "invalid"
+        result["reason"] = "supersession target points to itself"
+        return result
+    target_text = (row_markdown_cache or {}).get(target_slug)
+    if target_text is None:
+        target_text = safe_gbrain_get_text(target_slug)
+    if not target_text or str(target_text).startswith("unavailable:"):
+        result["status"] = "invalid"
+        result["reason"] = "supersession target is unavailable"
+        return result
+    target_meta, _target_body = parse_frontmatter(target_text)
+    reverse_slug, _reverse_id, _reverse_evidence = supersession_metadata(target_meta)
+    if reverse_slug == row_slug:
+        result["status"] = "invalid"
+        result["reason"] = "cyclic supersession metadata"
+        return result
+    if str(target_meta.get("status") or "").strip() != "completed":
+        result["status"] = "invalid"
+        result["reason"] = "supersession target is not completed"
+        return result
+    if target_id and target_id != str(target_meta.get("todo_id") or target_meta.get("id") or "").strip():
+        result["status"] = "invalid"
+        result["reason"] = "supersession target todo_id mismatch"
+        return result
+    if not evidence_slugs:
+        result["status"] = "invalid"
+        result["reason"] = "supersession evidence is absent"
+        return result
+    unavailable_evidence = []
+    for evidence_slug in evidence_slugs:
+        evidence_text = (row_markdown_cache or {}).get(evidence_slug)
+        if evidence_text is None:
+            evidence_text = safe_gbrain_get_text(evidence_slug)
+        if not evidence_text or str(evidence_text).startswith("unavailable:"):
+            unavailable_evidence.append(evidence_slug)
+    if unavailable_evidence:
+        result["status"] = "invalid"
+        result["reason"] = "supersession evidence is unavailable"
+        result["unavailable_evidence_slugs"] = unavailable_evidence
+        return result
+    result["status"] = "superseded"
+    result["current_blocker"] = False
+    result["reason"] = "explicit completed supersession with readable durable evidence"
+    return result
+
+
+def classify_todo_blockers(markdown, row_markdown_cache=None):
+    rows = parse_todo_table_rows(markdown)
+    failed_rows = [row for row in rows if row["status"] == "failed"]
+    planned_rows = [row for row in rows if row["status"] == "planned"]
+    implementing_rows = [row for row in rows if row["status"] == "implementing"]
+    failed_evaluations = [evaluate_failed_todo_supersession(row, row_markdown_cache or {}) for row in failed_rows]
+    current_failed = [item for item in failed_evaluations if item.get("current_blocker")]
+    current_blockers = [
+        {"todo_id": row["id"], "slug": row["node"], "status": row["status"], "title": row["title"]}
+        for row in planned_rows + implementing_rows
+    ] + current_failed
+    superseded = [item for item in failed_evaluations if item.get("status") == "superseded"]
+    invalid = [item for item in failed_evaluations if item.get("status") == "invalid"]
+    return {
+        "current_blockers": current_blockers,
+        "historical_failures": failed_evaluations,
+        "superseded_failures": superseded,
+        "invalid_supersessions": invalid,
+        "counts": {
+            "planned": len(planned_rows),
+            "implementing": len(implementing_rows),
+            "failed": len(failed_rows),
+            "current_unresolved": len(current_blockers),
+            "current_failed": len(current_failed),
+            "superseded_failed": len(superseded),
+            "invalid_supersession": len(invalid),
+            "historical_failed": len(failed_rows),
+        },
+    }
+
+
 def todo_weekly_deltas(markdown, days=7):
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
@@ -5713,6 +5862,8 @@ def verified_memory_outcomes(window, backlog, resolver_health):
     evidence_slugs = {
         "retrieval_quality": "reports/memory-stargraph-wish-sg0184-20260801t074549-0700-63e45d0",
         "ask_yoda": "runs/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df",
+        "ask_yoda_report": "reports/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df",
+        "ask_yoda_todo": "notes/memory-starmap-todo-list/resolve-ask-yoda-openclaw-provider-timeout-after-node-runtime-fix",
         "search_parity": "runs/memory-stargraph-wish-sg0185-20260801t204507-0700-125d15f",
         "capture_link": "runs/memory-stargraph-capture-link-drain-capture-link-drain-20260802t000254-0700-scheduled-85",
         "worker_learning": "learnings/memory-stargraph-discovery-20260802-package-proof-before-expanding-surface",
@@ -5736,6 +5887,9 @@ def verified_memory_outcomes(window, backlog, resolver_health):
     learning_text = evidence_texts["worker_learning"].lower()
     deltas = todo_weekly_deltas(backlog)
     blockers = count_todo_statuses(backlog)
+    row_markdown_cache = {slug: evidence_texts.get(key, "") for key, slug in evidence_slugs.items()}
+    row_markdown_cache["notes/memory-starmap-todo-list"] = backlog
+    blocker_classification = classify_todo_blockers(backlog, row_markdown_cache)
 
     retrieval_passed = evidence["retrieval_quality"]["available"] and (
         ("10/10" in retrieval_text or "answer_success_count=10" in retrieval_text)
@@ -5749,7 +5903,7 @@ def verified_memory_outcomes(window, backlog, resolver_health):
         "completed_empty_snapshot_enrichment" in capture_text or "capture_outcomes" in capture_text
     )
     learning_passed = evidence["worker_learning"]["available"] and ("learning" in learning_text or "proof" in learning_text)
-    unresolved_count = blockers.get("failed", 0) + blockers.get("planned", 0) + blockers.get("implementing", 0)
+    current_blocker_count = blocker_classification["counts"]["current_unresolved"]
 
     gates = [
         outcome_gate(
@@ -5808,12 +5962,20 @@ def verified_memory_outcomes(window, backlog, resolver_health):
         ),
         outcome_gate(
             "unresolved_blockers",
-            "Unresolved blockers",
-            "degraded" if unresolved_count else "pass",
-            [outcome_evidence("notes/memory-starmap-todo-list", backlog)],
-            passed=unresolved_count == 0,
-            counts={"failed": blockers.get("failed", 0), "planned": blockers.get("planned", 0), "implementing": blockers.get("implementing", 0)},
-            summary="Open blockers remain in the canonical backlog." if unresolved_count else "No planned, implementing, or failed backlog rows are present.",
+            "Current unresolved blockers",
+            "degraded" if current_blocker_count else "pass",
+            [outcome_evidence("notes/memory-starmap-todo-list", backlog)]
+            + [
+                outcome_evidence(item["slug"], item.get("reason", ""))
+                for item in blocker_classification["historical_failures"]
+            ],
+            passed=current_blocker_count == 0,
+            counts=blocker_classification["counts"],
+            summary=(
+                "Current planned, implementing, or unsuperseded failed blockers remain."
+                if current_blocker_count
+                else "No current blockers; historical failures are separated when explicitly superseded by completed evidence."
+            ),
             freshness="current" if backlog and not str(backlog).startswith("unavailable:") else "unknown",
         ),
     ]
@@ -5831,6 +5993,9 @@ def verified_memory_outcomes(window, backlog, resolver_health):
             "source": "bounded_gbrain_evidence_slugs",
         },
         "weekly_deltas": deltas,
+        "current_unresolved_blockers": blocker_classification["current_blockers"],
+        "historical_failures": blocker_classification["historical_failures"],
+        "superseded_failures": blocker_classification["superseded_failures"],
         "summary_counts": {
             "gates_total": len(gates),
             "gates_passed": passed,

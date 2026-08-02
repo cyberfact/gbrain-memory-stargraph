@@ -955,7 +955,28 @@ class ApiEndpointTests(unittest.TestCase):
             "notes/memory-starmap-todo-list": (
                 "| SG-0184 | completed | P1 | Benchmark | [[notes/benchmark]] | 2026-08-01T07:57:00-07:00 | Completed. |\n"
                 "| SG-0185 | completed | P1 | Search parity | [[notes/search]] | 2026-08-01T21:09:00-07:00 | Completed. |\n"
+                "| SG-0167 | completed | P1 | Ask Yoda model fix | [[notes/superseding]] | 2026-07-29T08:24:28-07:00 | Completed. |\n"
                 "| SG-0166 | failed | P1 | Historical blocker | [[notes/failed]] | 2026-07-28T16:08:24-07:00 | Failed. |"
+            ),
+            "notes/failed": (
+                "---\n"
+                "type: todo\n"
+                "status: failed\n"
+                "todo_id: SG-0166\n"
+                "superseded_by: notes/superseding\n"
+                "superseded_by_todo_id: SG-0167\n"
+                "supersession_evidence:\n"
+                "  - runs/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df\n"
+                "---\n"
+                "# Failed historical audit\n"
+            ),
+            "notes/superseding": (
+                "---\n"
+                "type: todo\n"
+                "status: completed\n"
+                "todo_id: SG-0167\n"
+                "---\n"
+                "# Completed superseding TODO\n"
             ),
             "learnings/memory-stargraph-20260719-operational-state-reconciliation-and-source-sync-preflight": "# Learning\n\nSource-sync preflight.",
             "reports/memory-stargraph-wish-sg0184-20260801t074549-0700-63e45d0": "10/10 answer success, 10/10 recall success, expected source coverage, contradiction pruning verified.",
@@ -985,14 +1006,20 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(outcomes["schema_version"], 1)
         self.assertEqual(outcomes["window"], "week")
         self.assertIn("weekly_deltas", outcomes)
-        self.assertEqual(outcomes["weekly_deltas"]["completed"], 2)
+        self.assertEqual(outcomes["weekly_deltas"]["completed"], 3)
         self.assertEqual(outcomes["summary_counts"]["gates_total"], 7)
-        self.assertEqual(outcomes["summary_counts"]["gates_passed"], 6)
+        self.assertEqual(outcomes["summary_counts"]["gates_passed"], 7)
         gates = {gate["key"]: gate for gate in outcomes["gates"]}
         self.assertEqual(gates["retrieval_quality_benchmark"]["status"], "pass")
         self.assertEqual(gates["natural_language_search_parity"]["status"], "pass")
         self.assertEqual(gates["contradiction_pruning"]["status"], "pass")
-        self.assertEqual(gates["unresolved_blockers"]["status"], "degraded")
+        self.assertEqual(gates["unresolved_blockers"]["status"], "pass")
+        self.assertEqual(gates["unresolved_blockers"]["counts"]["current_unresolved"], 0)
+        self.assertEqual(gates["unresolved_blockers"]["counts"]["historical_failed"], 1)
+        self.assertEqual(gates["unresolved_blockers"]["counts"]["superseded_failed"], 1)
+        self.assertEqual(outcomes["historical_failures"][0]["status"], "superseded")
+        self.assertEqual(outcomes["historical_failures"][0]["superseded_by_todo_id"], "SG-0167")
+        self.assertEqual(outcomes["current_unresolved_blockers"], [])
         self.assertIn("reports/memory-stargraph-wish-sg0184-20260801t074549-0700-63e45d0", gates["retrieval_quality_benchmark"]["evidence_slugs"])
         serialized = json.dumps(outcomes).lower()
         self.assertNotIn("api_key", serialized)
@@ -1029,6 +1056,79 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(gates["unresolved_blockers"]["status"], "degraded")
         self.assertFalse(gates["retrieval_quality_benchmark"]["passed"])
         self.assertEqual(gates["retrieval_quality_benchmark"]["evidence_slugs"], [])
+
+    def test_weekly_memory_value_digest_keeps_broken_supersession_degraded(self):
+        fake_store = FakeStore()
+        base_evidence = {
+            "learnings/memory-stargraph-20260719-operational-state-reconciliation-and-source-sync-preflight": "# Learning\n\nSource-sync preflight.",
+            "reports/memory-stargraph-wish-sg0184-20260801t074549-0700-63e45d0": "10/10 answer success, 10/10 recall success, expected source coverage, contradiction pruning verified.",
+            "runs/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df": "model-backed non-fallback answers with fallback state observed as zero.",
+            "runs/memory-stargraph-wish-sg0185-20260801t204507-0700-125d15f": "API top slug, UI top slug, focus slug, and first visible result all aligned.",
+            "runs/memory-stargraph-capture-link-drain-capture-link-drain-20260802t000254-0700-scheduled-85": "completed_empty_snapshot_enrichment with terminal outcomes.",
+            "learnings/memory-stargraph-discovery-20260802-package-proof-before-expanding-surface": "Learning: package proof before expanding surface.",
+        }
+
+        cases = [
+            (
+                "missing target",
+                {
+                    "notes/memory-starmap-todo-list": "| SG-0166 | failed | P1 | Failed | [[notes/failed]] | 2026-07-28T16:08:24-07:00 | Failed. |",
+                    "notes/failed": "---\nstatus: failed\ntodo_id: SG-0166\nsuperseded_by: notes/missing\nsuperseded_by_todo_id: SG-0167\nsupersession_evidence:\n  - runs/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df\n---\n# Failed\n",
+                },
+                "supersession target is unavailable",
+            ),
+            (
+                "incomplete target",
+                {
+                    "notes/memory-starmap-todo-list": "| SG-0166 | failed | P1 | Failed | [[notes/failed]] | 2026-07-28T16:08:24-07:00 | Failed. |",
+                    "notes/failed": "---\nstatus: failed\ntodo_id: SG-0166\nsuperseded_by: notes/superseding\nsuperseded_by_todo_id: SG-0167\nsupersession_evidence:\n  - runs/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df\n---\n# Failed\n",
+                    "notes/superseding": "---\nstatus: implementing\ntodo_id: SG-0167\n---\n# Incomplete\n",
+                },
+                "supersession target is not completed",
+            ),
+            (
+                "cyclic target",
+                {
+                    "notes/memory-starmap-todo-list": "| SG-0166 | failed | P1 | Failed | [[notes/failed]] | 2026-07-28T16:08:24-07:00 | Failed. |",
+                    "notes/failed": "---\nstatus: failed\ntodo_id: SG-0166\nsuperseded_by: notes/superseding\nsuperseded_by_todo_id: SG-0167\nsupersession_evidence:\n  - runs/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df\n---\n# Failed\n",
+                    "notes/superseding": "---\nstatus: completed\ntodo_id: SG-0167\nsuperseded_by: notes/failed\n---\n# Cyclic\n",
+                },
+                "cyclic supersession metadata",
+            ),
+            (
+                "missing evidence",
+                {
+                    "notes/memory-starmap-todo-list": "| SG-0166 | failed | P1 | Failed | [[notes/failed]] | 2026-07-28T16:08:24-07:00 | Failed. |",
+                    "notes/failed": "---\nstatus: failed\ntodo_id: SG-0166\nsuperseded_by: notes/superseding\nsuperseded_by_todo_id: SG-0167\n---\n# Failed\n",
+                    "notes/superseding": "---\nstatus: completed\ntodo_id: SG-0167\n---\n# Completed\n",
+                },
+                "supersession evidence is absent",
+            ),
+        ]
+
+        for _label, evidence, reason in cases:
+            merged = {**base_evidence, **evidence}
+
+            def fake_gbrain(command, slug, **_kwargs):
+                self.assertEqual(command, "get")
+                if slug not in merged:
+                    raise RuntimeError(f"missing {slug}")
+                return merged[slug]
+
+            with (
+                mock.patch("server.STORE", fake_store),
+                mock.patch("server.run_gbrain", side_effect=fake_gbrain),
+                mock.patch("server.resolver_feedback_health", return_value={"pending": 0}),
+            ):
+                status, data = self.dispatch_get("/api/memory-value-digest?window=week")
+
+            self.assertEqual(status, 200)
+            outcomes = data["verified_memory_outcomes"]
+            gate = {item["key"]: item for item in outcomes["gates"]}["unresolved_blockers"]
+            self.assertEqual(gate["status"], "degraded")
+            self.assertEqual(gate["counts"]["current_unresolved"], 1)
+            self.assertEqual(gate["counts"]["invalid_supersession"], 1 if "supersession" in reason or "cyclic" in reason else 0)
+            self.assertIn(reason, outcomes["historical_failures"][0]["reason"])
 
     def test_take_proposals_endpoint_bounds_filters_and_returns_counts(self):
         fake_store = FakeStore()

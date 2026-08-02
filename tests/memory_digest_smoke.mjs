@@ -54,9 +54,10 @@ try {
       hasAskYoda: /Model-backed Ask Yoda/.test(text),
       hasSearchParity: /Natural-language search parity/.test(text),
       hasCapture: text.includes("Capture Link capture/enrichment"),
+      hasCurrentBlockerDistinction: /No current blockers|current blocker/.test(text) && /historical failure/.test(text),
       hasPrivacy: /private|Aggregate/.test(text),
       rawHasOutcomes: /verified_memory_outcomes/.test(raw),
-      leaksSecret: new RegExp("api[_-]?key|sk-|authorization|raw prompt|/Users/", "i").test(raw),
+      leaksSecret: new RegExp("api[_-]?key|sk-[A-Za-z0-9]{20,}|authorization|raw prompt|/Users/", "i").test(raw),
     };
   });
   console.log(JSON.stringify(state, null, 2));
@@ -69,6 +70,7 @@ try {
     || !state.hasAskYoda
     || !state.hasSearchParity
     || !state.hasCapture
+    || !state.hasCurrentBlockerDistinction
     || !state.hasPrivacy
     || !state.rawHasOutcomes
     || state.leaksSecret

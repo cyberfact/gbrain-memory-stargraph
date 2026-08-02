@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.181";
+const UI_VERSION = "V1.0.182";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -4102,6 +4102,18 @@ function renderVerifiedMemoryOutcomesCard(digest) {
     grid.appendChild(item);
   });
   card.appendChild(grid);
+
+  const blockers = outcomes.current_unresolved_blockers || [];
+  const historical = outcomes.historical_failures || [];
+  const superseded = outcomes.superseded_failures || [];
+  if (blockers.length || historical.length) {
+    const distinction = document.createElement("p");
+    distinction.className = "verified-outcomes-distinction";
+    distinction.textContent = blockers.length
+      ? `${blockers.length} current blocker${blockers.length === 1 ? "" : "s"} need attention; ${superseded.length}/${historical.length} historical failure${historical.length === 1 ? "" : "s"} are explicitly superseded.`
+      : `No current blockers; ${superseded.length}/${historical.length} historical failure${historical.length === 1 ? "" : "s"} are explicitly superseded and remain auditable.`;
+    card.appendChild(distinction);
+  }
 
   const footer = document.createElement("p");
   footer.className = "verified-outcomes-privacy";
