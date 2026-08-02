@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.179";
+const UI_VERSION = "V1.0.180";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -1501,9 +1501,10 @@ function looksLikeExactSlug(value) {
     && !text.endsWith("/");
 }
 
-function reportSearchTiming(searchStartedAt) {
+function reportSearchTiming(searchStartedAt, topSlug = state.focusSlug) {
   const elapsed = Math.max(0, Math.round(performance.now() - searchStartedAt));
-  setSearchFeedback(`Search completed in ${elapsed}ms`, "success");
+  const resultText = topSlug ? ` Top result: ${topSlug}.` : "";
+  setSearchFeedback(`Search completed in ${elapsed}ms.${resultText}`, "success");
 }
 
 function showSearchSelectionFromGraph(slug) {
@@ -7501,13 +7502,11 @@ function bindEvents() {
   searchInput.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    hideFloatingPanels();
     pauseTourForManualSelection("manual search");
     void submitSearch();
   });
 
   searchButton.addEventListener("click", () => {
-    hideFloatingPanels();
     pauseTourForManualSelection("manual search");
     void submitSearch();
   });

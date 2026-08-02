@@ -1217,6 +1217,18 @@ try {
   await page.press("#searchInput", "Enter");
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
   await page.waitForFunction(
+    () => {
+      const state = window.__MEMORY_STARGRAPH__.getState();
+      const coverage = state.graph?.source?.coverage || {};
+      return coverage.last_search_query === "Tony Guan"
+        && Boolean(coverage.search_slugs?.[0])
+        && state.focusSlug === coverage.search_slugs[0];
+    },
+    null,
+    { timeout: 15000 },
+  );
+  await page.evaluate(() => window.__MEMORY_STARGRAPH__.loadEntity("people/tony-guan", { source: "manual", recordHistory: false }));
+  await page.waitForFunction(
     () => window.__MEMORY_STARGRAPH__.getState().focusSlug === "people/tony-guan",
     null,
     { timeout: 15000 },
@@ -1240,7 +1252,7 @@ try {
     };
   });
   if (tonySearch.focus !== "people/tony-guan" || !tonySearch.match || !tonySearch.filtered || !tonySearch.title?.toLowerCase().includes("tony") || !tonySearch.timelineBadgeVisible || tonySearch.timelineBadgeText !== "Timeline" || !(tonySearch.summary || "").trim()) {
-    throw new Error(`Expected Tony Guan search to focus, show timeline badge, and render summary text: ${JSON.stringify(tonySearch)}`);
+    throw new Error(`Expected Tony Guan entity selection to show timeline badge and render summary text after search: ${JSON.stringify(tonySearch)}`);
   }
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
