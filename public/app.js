@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.178";
+const UI_VERSION = "V1.0.179";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -1571,6 +1571,11 @@ function pickSearchFocus(graph, query) {
   const orderedSearchSlugs = normalizeSearchText(coverage.last_search_query || "") === normalizedQuery
     ? coverage.search_slugs || []
     : [];
+  const availableNodes = new Map((graph.nodes || []).map((node) => [node.slug, node]));
+  const topApiNode = orderedSearchSlugs
+    .map((slug) => availableNodes.get(slug))
+    .find((node) => node && !isHidden(node.slug));
+  if (topApiNode) return topApiNode.slug;
   const searchSlugs = new Set(orderedSearchSlugs);
   const searchRank = new Map(orderedSearchSlugs.map((slug, index) => [slug, index]));
   const candidates = (graph.nodes || [])

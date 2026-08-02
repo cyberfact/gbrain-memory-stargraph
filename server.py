@@ -172,7 +172,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.178"
+UI_VERSION = "V1.0.179"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -5368,6 +5368,17 @@ class GraphStore:
                 if isinstance(latest_raw_output, str) and latest_raw_output
                 else raw
             )
+            original_meta, _ = parse_frontmatter(raw)
+            latest_meta, _ = parse_frontmatter(latest_raw)
+            original_type = str(original_meta.get("type") or "").strip()
+            latest_type = str(latest_meta.get("type") or "").strip()
+            if original_type and original_type != "concept" and latest_type == "concept":
+                latest_raw = re.sub(
+                    r"(?m)^type:\s*['\"]?concept['\"]?\s*$",
+                    f"type: {original_type}",
+                    latest_raw,
+                    count=1,
+                )
             updated_raw = append_attachment_reference(
                 latest_raw,
                 relative_path,

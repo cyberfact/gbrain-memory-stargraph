@@ -88,7 +88,7 @@ class GTasksEventIngestionDocumentationContractTests(unittest.TestCase):
             "commits its local application status as `Applied`",
             "daily application-quota task",
             "exactly once",
-            "NATS JetStream is the selected independently managed durable queue",
+            "official `nats-server` v2.14.4 and `nats-py` v2.15.0 provide the independently managed durable queue",
             "must not roll it back, block completion, or turn it into a failed user operation",
             "preserve the complete event in durable retry state with the same `event_id`",
             "surface a non-blocking warning",
@@ -98,8 +98,8 @@ class GTasksEventIngestionDocumentationContractTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, normalized_runbook)
 
-        self.assertIn("Provisional NATS JetStream binding as of 2026-07-30", normalized_runbook)
-        self.assertIn("no tested JetStream binding", normalized_runbook)
+        self.assertIn("Tested local NATS JetStream binding as of 2026-07-30", normalized_runbook)
+        self.assertIn("Isolated real-broker tests prove durable PubAck", normalized_runbook)
         self.assertNotRegex(runbook, re.compile(r"(?m)^(GET|POST|PUT|PATCH|DELETE)\s+/api/"))
 
     def test_gtasks_event_runbook_is_discoverable(self):
