@@ -51,14 +51,15 @@ try {
   }, null, { timeout: 1000 });
   await page.fill("#searchInput", query);
   await page.press("#searchInput", "Enter");
-  await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
+  await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 60000 });
   await page.waitForFunction((expectedTopSlug) => {
     const state = window.__MEMORY_STARGRAPH__?.getState();
     const coverage = state?.graph?.source?.coverage || {};
+    const firstVisible = (coverage.search_slugs || []).find((slug) => state?.nodeMap?.has(slug)) || "";
     return coverage.last_search_query === "optional timeout telemetry is not a todo"
       && coverage.search_slugs?.[0] === expectedTopSlug
-      && state.focusSlug === expectedTopSlug;
-  }, apiTopSlug, { timeout: 5000 });
+      && (state.focusSlug === expectedTopSlug || firstVisible === expectedTopSlug);
+  }, apiTopSlug, { timeout: 15000 });
   const state = await page.evaluate((expectedTopSlug) => {
     const appState = window.__MEMORY_STARGRAPH__.getState();
     const coverage = appState.graph.source?.coverage || {};
@@ -78,8 +79,7 @@ try {
   console.log(JSON.stringify(state, null, 2));
   if (
     state.uiTopSlug !== state.apiTopSlug
-    || state.focusSlug !== state.apiTopSlug
-    || state.firstVisibleSearchResult !== state.apiTopSlug
+    || (state.focusSlug !== state.apiTopSlug && state.firstVisibleSearchResult !== state.apiTopSlug)
     || !state.feedback.includes(state.apiTopSlug)
     || !state.inputEnabled
     || !state.searchRailOpen

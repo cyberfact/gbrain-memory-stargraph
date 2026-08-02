@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.180";
+const UI_VERSION = "V1.0.181";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -4060,11 +4060,61 @@ async function openSampleBrainWindow() {
   modalMarkdown.appendChild(pre);
 }
 
+function outcomeStatusLabel(status) {
+  const clean = String(status || "unknown").replace(/_/g, " ");
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
+function renderVerifiedMemoryOutcomesCard(digest) {
+  const outcomes = digest?.verified_memory_outcomes || {};
+  const card = document.createElement("section");
+  card.className = "verified-outcomes-card";
+  card.setAttribute("aria-label", "Weekly verified memory outcomes");
+
+  const header = document.createElement("div");
+  header.className = "verified-outcomes-header";
+  const titleWrap = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = "Weekly verified memory outcomes";
+  const subtitle = document.createElement("p");
+  const counts = outcomes.summary_counts || {};
+  subtitle.textContent = `${counts.gates_passed ?? 0}/${counts.gates_total ?? 0} gates passed · ${outcomeStatusLabel(outcomes.status)}`;
+  titleWrap.append(title, subtitle);
+  const status = document.createElement("span");
+  status.className = `verified-outcomes-status is-${String(outcomes.status || "unknown").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "unknown"}`;
+  status.textContent = outcomeStatusLabel(outcomes.status);
+  header.append(titleWrap, status);
+  card.appendChild(header);
+
+  const grid = document.createElement("div");
+  grid.className = "verified-outcomes-grid";
+  (outcomes.gates || []).forEach((gate) => {
+    const item = document.createElement("article");
+    item.className = "verified-outcome-item";
+    const gateTitle = document.createElement("h4");
+    gateTitle.textContent = gate.label || gate.key || "Outcome";
+    const gateMeta = document.createElement("p");
+    const evidenceCount = Array.isArray(gate.evidence_slugs) ? gate.evidence_slugs.length : 0;
+    gateMeta.textContent = `${outcomeStatusLabel(gate.status)} · ${evidenceCount} evidence link${evidenceCount === 1 ? "" : "s"}`;
+    const gateSummary = document.createElement("p");
+    gateSummary.textContent = gate.summary || "No summary available.";
+    item.append(gateTitle, gateMeta, gateSummary);
+    grid.appendChild(item);
+  });
+  card.appendChild(grid);
+
+  const footer = document.createElement("p");
+  footer.className = "verified-outcomes-privacy";
+  footer.textContent = outcomes.privacy || digest?.privacy || "Aggregate evidence only; private content is withheld.";
+  card.appendChild(footer);
+  return card;
+}
+
 async function openMemoryDigestWindow() {
   hideFloatingPanels();
   modalKicker.textContent = "Memory value";
-  modalTitle.textContent = "Goal progress digest";
-  modalMessage.textContent = "Read-only digest from Runs, Learnings, TODO movement, health, and feedback evidence.";
+  modalTitle.textContent = "Weekly outcomes digest";
+  modalMessage.textContent = "Read-only digest from verified outcomes, Runs, Learnings, TODO movement, health, and feedback evidence.";
   modalPrimaryButton.textContent = "Close";
   modalCloseButton.setAttribute("aria-label", "Close memory value digest");
   modalPrimaryButton.hidden = false;
@@ -4080,14 +4130,18 @@ async function openMemoryDigestWindow() {
   modalMarkdown.appendChild(loading);
   operationModal.hidden = false;
   state.modalAction = { action: "memory-digest", slug: "goals/memory-stargraph-continuous-learning-local-knowledge-os", label: "Memory value digest" };
-  const response = await apiGet("/api/memory-value-digest?window=day");
+  const response = await apiGet("/api/memory-value-digest?window=week");
   const pre = document.createElement("pre");
   pre.className = "yoda-log-window";
-  pre.textContent = response.ok
-    ? JSON.stringify(response.data, null, 2)
-    : `Memory value digest unavailable: ${response.data?.error || response.status}`;
   modalMarkdown.innerHTML = "";
-  modalMarkdown.appendChild(pre);
+  if (response.ok) {
+    modalMarkdown.appendChild(renderVerifiedMemoryOutcomesCard(response.data || {}));
+    pre.textContent = JSON.stringify(response.data, null, 2);
+    modalMarkdown.appendChild(pre);
+  } else {
+    pre.textContent = `Memory value digest unavailable: ${response.data?.error || response.status}`;
+    modalMarkdown.appendChild(pre);
+  }
 }
 
 function captureYodaModelReturn() {

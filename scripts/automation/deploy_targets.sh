@@ -53,6 +53,7 @@ tracked_files=(
   scripts/automation/yoda_gap_evaluator.py
   automations/memory-stargraph-capture-link-drain/prompt.md
   tests/browser_smoke.mjs
+  tests/memory_digest_smoke.mjs
   tests/search_api_ui_parity_smoke.mjs
   tests/test_frontend_static.py
   tests/test_source_sync_preflight.py

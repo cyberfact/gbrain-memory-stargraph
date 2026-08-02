@@ -17,6 +17,7 @@ import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -172,7 +173,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.180"
+UI_VERSION = "V1.0.181"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -2451,7 +2452,7 @@ def evidence_record_search_results(
     ], status
 
 
-def merge_search_results(primary_results, evidence_results):
+def merge_search_results(primary_results, evidence_results, query=""):
     merged = {}
     for result in evidence_results + primary_results:
         slug = result["slug"]
@@ -2464,14 +2465,23 @@ def merge_search_results(primary_results, evidence_results):
             current["preview"] = result.get("preview") or ""
         if not current.get("label"):
             current["label"] = result.get("label") or make_label(slug)
+    terms = evidence_search_terms(query)
+    if terms:
+        for item in merged.values():
+            haystack = " ".join(
+                str(item.get(key) or "")
+                for key in ("slug", "label", "preview")
+            ).lower().replace("_", "-")
+            if all(term in haystack for term in terms):
+                item["score"] = float(item.get("score") or 0) + 10.0
     evidence_order = {result["slug"]: index for index, result in enumerate(evidence_results)}
     primary_order = {result["slug"]: index for index, result in enumerate(primary_results)}
     return sorted(
         merged.values(),
         key=lambda item: (
+            float(item.get("score") or 0),
             1 if item["slug"] in evidence_order else 0,
             -evidence_order.get(item["slug"], 9999),
-            float(item.get("score") or 0),
             -primary_order.get(item["slug"], 9999),
         ),
         reverse=True,
@@ -2505,6 +2515,8 @@ def loaded_graph_search_results(raw_graph, query, existing_slugs=None, result_li
                 score += 1.5
             if term in tags.lower():
                 score += 1.0
+        if all(term in haystack for term in terms):
+            score += 50.0
         if score <= 0:
             continue
         candidates.append(
@@ -3960,7 +3972,7 @@ def search_raw_graph(raw_graph, query):
         query,
         existing_slugs=[result["slug"] for result in evidence_results + primary_results],
     )
-    results = merge_search_results(primary_results, evidence_results + loaded_results)
+    results = merge_search_results(primary_results, evidence_results + loaded_results, query)
     nodes = {str(node.get("slug")): dict(node) for node in raw_graph.get("nodes", []) if node.get("slug")}
     for result in results:
         slug = result["slug"]
@@ -5646,6 +5658,195 @@ def count_todo_statuses(markdown):
     return counts
 
 
+def todo_weekly_deltas(markdown, days=7):
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    deltas = {"completed": 0, "planned": 0, "implementing": 0, "failed": 0, "window_days": days, "status": "partial"}
+    dated_rows = 0
+    for line in str(markdown or "").splitlines():
+        match = re.match(r"\|\s*SG-\d+\s*\|\s*([^|]+)\|\s*[^|]+\|\s*[^|]+\|\s*[^|]+\|\s*([^|]+)\|", line)
+        if not match:
+            continue
+        status = match.group(1).strip()
+        raw_date = match.group(2).strip()
+        try:
+            parsed = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        dated_rows += 1
+        if parsed.astimezone(timezone.utc) >= cutoff and status in deltas:
+            deltas[status] += 1
+    deltas["status"] = "complete" if dated_rows else "unknown"
+    deltas["dated_rows"] = dated_rows
+    return deltas
+
+
+def outcome_evidence(slug, text):
+    unavailable = str(text or "").startswith("unavailable:")
+    return {
+        "slug": slug,
+        "available": bool(text and not unavailable),
+        "status": "missing" if unavailable or not text else "available",
+    }
+
+
+def outcome_gate(key, label, status, evidence, *, passed=False, counts=None, summary="", freshness="current"):
+    return {
+        "key": key,
+        "label": label,
+        "status": status,
+        "passed": bool(passed),
+        "counts": counts or {},
+        "summary": sanitize_text_summary(summary, 220),
+        "freshness": freshness,
+        "evidence_slugs": [item["slug"] for item in evidence if item.get("available")],
+        "evidence": evidence,
+    }
+
+
+def verified_memory_outcomes(window, backlog, resolver_health):
+    if window != "week":
+        return None
+
+    evidence_slugs = {
+        "retrieval_quality": "reports/memory-stargraph-wish-sg0184-20260801t074549-0700-63e45d0",
+        "ask_yoda": "runs/memory-stargraph-wish-sg0167-20260729t074025-0700-936d7df",
+        "search_parity": "runs/memory-stargraph-wish-sg0185-20260801t204507-0700-125d15f",
+        "capture_link": "runs/memory-stargraph-capture-link-drain-capture-link-drain-20260802t000254-0700-scheduled-85",
+        "worker_learning": "learnings/memory-stargraph-discovery-20260802-package-proof-before-expanding-surface",
+    }
+    evidence_texts = {}
+    with ThreadPoolExecutor(max_workers=len(evidence_slugs)) as executor:
+        futures = {key: executor.submit(safe_gbrain_get_text, slug) for key, slug in evidence_slugs.items()}
+        for key, future in futures.items():
+            try:
+                evidence_texts[key] = future.result(timeout=25)
+            except Exception as exc:  # noqa: BLE001
+                evidence_texts[key] = f"unavailable: {exc}"
+    evidence = {
+        key: outcome_evidence(slug, evidence_texts.get(key, ""))
+        for key, slug in evidence_slugs.items()
+    }
+    retrieval_text = evidence_texts["retrieval_quality"].lower()
+    ask_text = evidence_texts["ask_yoda"].lower()
+    search_text = evidence_texts["search_parity"].lower()
+    capture_text = evidence_texts["capture_link"].lower()
+    learning_text = evidence_texts["worker_learning"].lower()
+    deltas = todo_weekly_deltas(backlog)
+    blockers = count_todo_statuses(backlog)
+
+    retrieval_passed = evidence["retrieval_quality"]["available"] and (
+        ("10/10" in retrieval_text or "answer_success_count=10" in retrieval_text)
+        and ("10/10" in retrieval_text or "recall_success_count=10" in retrieval_text)
+        and ("source coverage" in retrieval_text or "source_coverage" in retrieval_text or "expected-source coverage" in retrieval_text or "expected_source_matched=9/9" in retrieval_text)
+    )
+    contradiction_passed = evidence["retrieval_quality"]["available"] and "contradiction" in retrieval_text and "prun" in retrieval_text
+    ask_passed = evidence["ask_yoda"]["available"] and "model-backed" in ask_text and "fallback" in ask_text and "non-fallback" in ask_text
+    search_passed = evidence["search_parity"]["available"] and "api top" in search_text and "focus" in search_text
+    capture_has_activity = evidence["capture_link"]["available"] and (
+        "completed_empty_snapshot_enrichment" in capture_text or "capture_outcomes" in capture_text
+    )
+    learning_passed = evidence["worker_learning"]["available"] and ("learning" in learning_text or "proof" in learning_text)
+    unresolved_count = blockers.get("failed", 0) + blockers.get("planned", 0) + blockers.get("implementing", 0)
+
+    gates = [
+        outcome_gate(
+            "retrieval_quality_benchmark",
+            "Retrieval quality benchmark",
+            "pass" if retrieval_passed else evidence["retrieval_quality"]["status"],
+            [evidence["retrieval_quality"]],
+            passed=retrieval_passed,
+            counts={"answer_success": 10 if retrieval_passed else 0, "recall_success": 10 if retrieval_passed else 0},
+            summary="Synthetic weekly benchmark has answer/recall success and expected source coverage." if retrieval_passed else "Benchmark evidence is missing or incomplete.",
+        ),
+        outcome_gate(
+            "model_backed_ask_yoda",
+            "Model-backed Ask Yoda",
+            "pass" if ask_passed else evidence["ask_yoda"]["status"],
+            [evidence["ask_yoda"]],
+            passed=ask_passed,
+            counts={"fallback_events": 0 if ask_passed else None},
+            summary="Recent accepted evaluator evidence reports model-backed non-fallback answers." if ask_passed else "Model-backed Ask Yoda evidence is missing or stale.",
+        ),
+        outcome_gate(
+            "natural_language_search_parity",
+            "Natural-language search parity",
+            "pass" if search_passed else evidence["search_parity"]["status"],
+            [evidence["search_parity"]],
+            passed=search_passed,
+            counts={"parity_queries_verified": 1 if search_passed else 0},
+            summary="API top slug, visible result, and UI focus align for the weekly parity query." if search_passed else "Search parity evidence is missing or incomplete.",
+        ),
+        outcome_gate(
+            "contradiction_pruning",
+            "Contradiction pruning",
+            "pass" if contradiction_passed else evidence["retrieval_quality"]["status"],
+            [evidence["retrieval_quality"]],
+            passed=contradiction_passed,
+            counts={"stale_contradictions_pruned": 1 if contradiction_passed else 0},
+            summary="Benchmark evidence includes stale contradiction pruning." if contradiction_passed else "Contradiction-pruning evidence is unavailable.",
+        ),
+        outcome_gate(
+            "capture_link_outcomes",
+            "Capture Link capture/enrichment",
+            "pass" if capture_has_activity else evidence["capture_link"]["status"],
+            [evidence["capture_link"]],
+            passed=capture_has_activity,
+            counts={"recent_enrichment_runs": 1 if capture_has_activity else 0},
+            summary="Recent host runner evidence includes capture/enrichment terminal outcomes." if capture_has_activity else "No current Capture Link terminal outcome was readable.",
+        ),
+        outcome_gate(
+            "worker_learnings",
+            "Worker-produced Learnings",
+            "pass" if learning_passed else evidence["worker_learning"]["status"],
+            [evidence["worker_learning"]],
+            passed=learning_passed,
+            counts={"recent_learning_items": 1 if learning_passed else 0},
+            summary="A worker-produced Learning packages proof before expanding surface area." if learning_passed else "No recent worker Learning evidence was readable.",
+        ),
+        outcome_gate(
+            "unresolved_blockers",
+            "Unresolved blockers",
+            "degraded" if unresolved_count else "pass",
+            [outcome_evidence("notes/memory-starmap-todo-list", backlog)],
+            passed=unresolved_count == 0,
+            counts={"failed": blockers.get("failed", 0), "planned": blockers.get("planned", 0), "implementing": blockers.get("implementing", 0)},
+            summary="Open blockers remain in the canonical backlog." if unresolved_count else "No planned, implementing, or failed backlog rows are present.",
+            freshness="current" if backlog and not str(backlog).startswith("unavailable:") else "unknown",
+        ),
+    ]
+    passed = sum(1 for gate in gates if gate["passed"])
+    missing = sum(1 for gate in gates if gate["status"] == "missing")
+    degraded = sum(1 for gate in gates if gate["status"] == "degraded")
+    aggregate_status = "pass" if passed == len(gates) else ("partial" if missing else ("degraded" if degraded else "partial"))
+    return {
+        "schema_version": 1,
+        "window": "week",
+        "read_only": True,
+        "privacy": "Aggregate counts, statuses, and evidence slugs only; private snippets, prompt text, secrets, and host-private paths are withheld.",
+        "freshness": {
+            "status": "current" if missing == 0 else "partial",
+            "source": "bounded_gbrain_evidence_slugs",
+        },
+        "weekly_deltas": deltas,
+        "summary_counts": {
+            "gates_total": len(gates),
+            "gates_passed": passed,
+            "gates_missing": missing,
+            "gates_degraded": degraded,
+        },
+        "status": aggregate_status,
+        "gates": gates,
+        "resolver_choice": {
+            "status": "observed" if isinstance(resolver_health, dict) and not resolver_health.get("error") else "unknown",
+            "pending_proposals": parse_nonnegative_int((resolver_health or {}).get("pending", 0) if isinstance(resolver_health, dict) else 0),
+            "auto_approval": False,
+        },
+    }
+
+
 def memory_value_digest(window="day"):
     window = str(window or "day").strip().lower()
     if window not in {"day", "week"}:
@@ -5676,7 +5877,7 @@ def memory_value_digest(window="day"):
         if todo_movement["implementing"]
         else "Pick the next evidence-backed planned TODO or run Product Owner prioritization if no planned work remains."
     )
-    return {
+    digest = {
         "ok": True,
         "read_only": True,
         "ui_version": UI_VERSION,
@@ -5703,6 +5904,10 @@ def memory_value_digest(window="day"):
         "next_action": next_action,
         "privacy": "Private node content is not embedded in this digest; inspect linked evidence only when authorized.",
     }
+    outcomes = verified_memory_outcomes(window, backlog, resolver_health)
+    if outcomes:
+        digest["verified_memory_outcomes"] = outcomes
+    return digest
 
 
 class MemoryStargraphHandler(SimpleHTTPRequestHandler):

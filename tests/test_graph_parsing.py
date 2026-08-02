@@ -42,6 +42,7 @@ from server import (
     gbrain_file_ledger_has_relative_path,
     parse_gbrain_durable_evidence,
     safe_upload_filename,
+    merge_search_results,
 )
 
 
@@ -195,6 +196,32 @@ class GraphParsingTests(unittest.TestCase):
         self.assertIn(
             "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
             coverage["search_slugs"],
+        )
+
+    def test_merge_search_results_keeps_exact_primary_above_partial_broad_evidence(self):
+        results = merge_search_results(
+            [
+                {
+                    "slug": "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+                    "score": 1.0,
+                    "label": "Optional timeout telemetry is not a TODO",
+                    "preview": "",
+                }
+            ],
+            [
+                {
+                    "slug": "learnings/memory-stargraph-20260724-optional-broad-graph-timeouts-should-not-degrade-grounded-context",
+                    "score": 4.0,
+                    "label": "Optional broad graph timeouts",
+                    "preview": "",
+                }
+            ],
+            "optional timeout telemetry is not a todo",
+        )
+
+        self.assertEqual(
+            results[0]["slug"],
+            "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
         )
 
     def test_evidence_search_ignores_low_signal_page_list_matches(self):
