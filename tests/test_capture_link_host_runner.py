@@ -415,29 +415,183 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
             self.assertFalse(health["current_process_runner_enabled"])
             self.assertEqual(health["daemon_state"]["status"], "idle")
 
-    def test_non_empty_snapshot_fails_closed_without_mutating_capture(self):
+    def test_non_empty_snapshot_drains_frozen_row_with_reservation_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             runner.submit_request(root, self.make_request())
+            events = []
+
+            def fake_transition(capture_id, expected, target, notes, now=None):
+                events.append(("transition", capture_id, expected, target))
+                return {
+                    "capture_id": capture_id,
+                    "status": target,
+                    "child_slug": "notes/memory-starmap-capture-list/cap-0001-example",
+                    "updated_at": runner.iso_now(),
+                }
+
+            def fake_put(slug, markdown):
+                events.append(("put", slug))
+                if "memory-stargraph-captures" in slug:
+                    self.assertIn("Example Source", markdown)
+
             with (
                 mock.patch.object(runner, "current_commit", return_value="abc123"),
                 mock.patch.object(runner.capture, "apply_compaction", return_value={"created_archives": []}),
                 mock.patch.object(runner.capture, "create_snapshot", return_value={
                     "invocation_id": "sg0176-test-0001",
                     "started_at": "2026-07-30T11:59:00-07:00",
-                    "rows": [{"id": "CAP-0001", "status": "planned"}],
+                    "rows": [{
+                        "id": "CAP-0001",
+                        "status": "planned",
+                        "source": "https://example.com/source",
+                        "source kind": "url",
+                        "node": "[[notes/memory-starmap-capture-list/cap-0001-example]]",
+                        "target": "",
+                        "notes": "Capture example source.",
+                    }],
                 }),
+                mock.patch.object(runner.capture, "apply_transition", side_effect=fake_transition),
+                mock.patch.object(runner, "get_entity", return_value="---\ntype: capture\nstatus: capturing\n---\n# CAP\n\n## Capture Instructions\n\nCapture example source.\n"),
+                mock.patch.object(runner, "fetch_capture_source", return_value={
+                    "status": "fetched",
+                    "source_url": "https://example.com/source",
+                    "bytes_read": 123,
+                    "bytes_truncated": False,
+                    "title": "Example Source",
+                    "text_excerpt": "Example excerpt",
+                    "text_truncated": False,
+                }),
+                mock.patch.object(runner, "put_entity", side_effect=fake_put),
+                mock.patch.object(runner.capture, "link"),
                 mock.patch.dict(os.environ, {"MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED": "1"}),
-                self.lifecycle_mocks()[0],
                 self.lifecycle_mocks()[1],
                 self.lifecycle_mocks()[2],
             ):
                 runner.process_one(root)
 
             result = runner.read_status(root, "sg0176-test-0001")
-            self.assertEqual(result["status"], "failed")
-            self.assertEqual(result["result"], "non_empty_snapshot_requires_host_capture_extension")
-            self.assertIn("run_slug", result["evidence"])
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["result"], "completed_non_empty_snapshot_drain")
+            drain = result["evidence"]["capture_drain"]
+            self.assertEqual(drain["frozen_ids"], ["CAP-0001"])
+            self.assertEqual(drain["metrics"]["completed_items"], 1)
+            self.assertTrue(drain["all_frozen_terminal"])
+            first_transition = events.index(("transition", "CAP-0001", "planned", "capturing"))
+            first_put = next(index for index, event in enumerate(events) if event[0] == "put" and "memory-stargraph-captures" in event[1])
+            completed_transition = events.index(("transition", "CAP-0001", "capturing", "completed"))
+            self.assertLess(first_transition, first_put)
+            self.assertLess(first_put, completed_transition)
+            self.assertIn("notes/memory-stargraph-captures/cap-0001-example-source", drain["outcomes"][0]["target_slug"])
+
+    def test_non_empty_snapshot_terminalizes_item_failure_after_reservation(self):
+        values = runner.validate_request(self.make_request())
+        run_slug, report_slug = runner.lifecycle_slugs(values)
+        snapshot = {
+            "invocation_id": "sg0176-test-0001",
+            "rows": [{
+                "id": "CAP-0001",
+                "status": "planned",
+                "source": "https://example.com/source",
+                "source kind": "url",
+                "node": "[[notes/memory-starmap-capture-list/cap-0001-example]]",
+                "target": "",
+                "notes": "Capture example source.",
+            }],
+        }
+        transitions = []
+
+        def fake_transition(capture_id, expected, target, notes, now=None):
+            transitions.append((capture_id, expected, target))
+            return {
+                "capture_id": capture_id,
+                "status": target,
+                "child_slug": "notes/memory-starmap-capture-list/cap-0001-example",
+                "updated_at": runner.iso_now(),
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch.object(runner.capture, "apply_transition", side_effect=fake_transition),
+                mock.patch.object(runner, "get_entity", return_value="# CAP\n"),
+                mock.patch.object(runner, "fetch_capture_source", side_effect=runner.RunnerError("fetch refused")),
+                mock.patch.object(runner, "update_active_lifecycle"),
+            ):
+                evidence = runner.drain_frozen_capture_rows(root, values, run_slug, report_slug, snapshot, {"snapshot": snapshot})
+        self.assertEqual(evidence["result"], "completed_non_empty_snapshot_drain_with_failures")
+        self.assertEqual(evidence["metrics"]["failed_items"], 1)
+        self.assertEqual(transitions, [("CAP-0001", "planned", "capturing"), ("CAP-0001", "capturing", "failed")])
+        self.assertTrue(evidence["failures"][0]["readback_verified"])
+
+    def test_non_empty_snapshot_processes_in_deterministic_order_and_rejects_stale_row(self):
+        values = runner.validate_request(self.make_request())
+        run_slug, report_slug = runner.lifecycle_slugs(values)
+        good_rows = [
+            {"id": "CAP-0002", "status": "planned", "source": "https://example.com/2", "node": "[[notes/cap-2]]", "target": "", "notes": ""},
+            {"id": "CAP-0001", "status": "planned", "source": "https://example.com/1", "node": "[[notes/cap-1]]", "target": "", "notes": ""},
+        ]
+        order = []
+
+        def fake_transition(capture_id, expected, target, notes, now=None):
+            if expected == "planned":
+                order.append(capture_id)
+            return {"capture_id": capture_id, "status": target, "child_slug": f"notes/{capture_id.lower()}", "updated_at": runner.iso_now()}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch.object(runner.capture, "apply_transition", side_effect=fake_transition),
+                mock.patch.object(runner, "get_entity", return_value="# CAP\n"),
+                mock.patch.object(runner, "fetch_capture_source", return_value={"status": "fetched", "bytes_read": 1, "bytes_truncated": False, "title": "T", "text_excerpt": "E", "text_truncated": False}),
+                mock.patch.object(runner, "put_entity"),
+                mock.patch.object(runner.capture, "link"),
+                mock.patch.object(runner, "update_active_lifecycle"),
+            ):
+                runner.drain_frozen_capture_rows(root, values, run_slug, report_slug, {"rows": good_rows}, {"snapshot": {"rows": good_rows}})
+        self.assertEqual(order, ["CAP-0001", "CAP-0002"])
+
+        stale = {"rows": [{"id": "CAP-0003", "status": "capturing", "source": "https://example.com/3", "node": "[[notes/cap-3]]"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(runner.RunnerPhaseError, "not planned"):
+                runner.drain_frozen_capture_rows(Path(tmp), values, run_slug, report_slug, stale, {"snapshot": stale})
+
+    def test_cap0012_shape_builds_bounded_capture_artifact(self):
+        values = runner.validate_request(self.make_request(invocation_id="capture-link-drain-20260803t074152-0700-recovery-85"))
+        row = {
+            "id": "CAP-0012",
+            "status": "planned",
+            "source": "https://www.salesforce.com/news/stories/toward-self-improving-agents/",
+            "source kind": "url",
+            "node": "[[notes/memory-starmap-capture-list/cap-0012-https-www-salesforce-com-news-stories-toward-self-improv]]",
+            "target": "",
+            "notes": "queued",
+        }
+        child = """---
+type: capture
+status: planned
+---
+# CAP-0012
+
+## Capture Instructions
+
+Capture the Salesforce article 'Toward Self-Improving Agents' with source provenance and preserve its key concepts on governed recursive self-improvement, frozen-weight agent optimization, verification, and reward-hacking risks.
+"""
+        fetched = {
+            "status": "fetched",
+            "source_url": row["source"],
+            "bytes_read": 9000,
+            "bytes_truncated": False,
+            "title": "Toward Self-Improving Agents",
+            "text_excerpt": "Self-improving agents need verification and safeguards against reward hacking.",
+            "text_truncated": False,
+        }
+        slug, artifact = runner.build_capture_artifact(row, child, fetched, values)
+        self.assertEqual(slug, "notes/memory-stargraph-captures/cap-0012-toward-self-improving-agents")
+        self.assertIn("governed recursive self-improvement", artifact)
+        self.assertIn("reward-hacking risks", artifact)
+        self.assertIn("https://www.salesforce.com/news/stories/toward-self-improving-agents/", artifact)
+        self.assertIn("Self-improving agents need verification", artifact)
 
     def test_terminalize_lifecycle_rejects_active_tag_readback(self):
         values = runner.validate_request(self.make_request())

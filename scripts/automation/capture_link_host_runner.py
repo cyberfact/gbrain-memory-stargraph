@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
 import json
 import os
 import re
@@ -39,6 +40,10 @@ MAX_ENRICHMENT_EVIDENCE_ITEMS = 20
 ENRICHMENT_ENTITY_READ_TIMEOUT = 15
 CURATOR_POLL_MAX_SECONDS = 10 * 60
 RUNNER_HEARTBEAT_STALE_SECONDS = 2 * 60
+MAX_CAPTURE_FETCH_BYTES = 180_000
+MAX_CAPTURE_TEXT_CHARS = 6_000
+MAX_CAPTURE_INSTRUCTION_CHARS = 2_000
+MAX_CAPTURE_FETCH_SECONDS = 30
 
 
 class RunnerError(RuntimeError):
@@ -959,6 +964,283 @@ def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]
     }
 
 
+def _plain_cell(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _extract_wikilink(value: str) -> str:
+    match = re.search(r"\[\[([^\]]+)\]\]", value or "")
+    return match.group(1).strip() if match else ""
+
+
+def _slug_tail(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return cleaned[:90].strip("-") or "source"
+
+
+def _capture_title(row: dict[str, str], child_markdown: str, fetched: dict[str, object]) -> str:
+    title = _plain_cell(fetched.get("title"))
+    if title:
+        return title
+    match = re.search(r"(?m)^#\s+(.+?)\s*$", child_markdown)
+    if match:
+        return _plain_cell(match.group(1))
+    source = _plain_cell(row.get("source"))
+    return source.rstrip("/").rsplit("/", 1)[-1] or _plain_cell(row.get("id")) or "Captured source"
+
+
+def _target_slug(row: dict[str, str], title: str) -> str:
+    configured = _extract_wikilink(_plain_cell(row.get("target")))
+    if configured:
+        return configured
+    capture_id = _plain_cell(row.get("id")).lower() or "capture"
+    return f"notes/memory-stargraph-captures/{_slug_tail(capture_id)}-{_slug_tail(title)}"
+
+
+def _extract_capture_instructions(child_markdown: str, row: dict[str, str]) -> str:
+    match = re.search(r"(?ms)^## Capture Instructions\s*\n(.*?)(?=^## |\Z)", child_markdown)
+    instructions = match.group(1).strip() if match else ""
+    if not instructions:
+        instructions = _plain_cell(row.get("notes"))
+    return instructions[:MAX_CAPTURE_INSTRUCTION_CHARS]
+
+
+def _html_to_text(raw: str) -> tuple[str, str]:
+    title_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw)
+    title = html.unescape(re.sub(r"\s+", " ", title_match.group(1)).strip()) if title_match else ""
+    body = re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", raw)
+    body = re.sub(r"(?s)<!--.*?-->", " ", body)
+    body = re.sub(r"(?is)<br\s*/?>", "\n", body)
+    body = re.sub(r"(?is)</(p|div|section|article|header|footer|li|h[1-6])>", "\n", body)
+    body = re.sub(r"(?s)<[^>]+>", " ", body)
+    text = html.unescape(body)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r"\n\s+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return title, text
+
+
+def fetch_capture_source(source_url: str) -> dict[str, object]:
+    if not source_url or not re.match(r"^https?://", source_url):
+        raise RunnerError("capture source URL is missing or unsupported")
+    try:
+        result = subprocess.run(
+            ["curl", "-L", "-sS", "--fail", "--max-time", str(MAX_CAPTURE_FETCH_SECONDS), source_url],
+            capture_output=True,
+            check=False,
+            timeout=MAX_CAPTURE_FETCH_SECONDS + 10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RunnerError(f"source fetch failed: {exc}") from exc
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or b"").decode("utf-8", errors="replace")
+        raise RunnerError(f"source fetch failed: {error.strip()[:500]}")
+    raw_bytes = result.stdout[:MAX_CAPTURE_FETCH_BYTES]
+    raw = raw_bytes.decode("utf-8", errors="replace")
+    title, text = _html_to_text(raw)
+    return {
+        "status": "fetched",
+        "source_url": source_url,
+        "bytes_read": len(raw_bytes),
+        "bytes_truncated": len(result.stdout) > MAX_CAPTURE_FETCH_BYTES,
+        "title": title,
+        "text_excerpt": text[:MAX_CAPTURE_TEXT_CHARS],
+        "text_truncated": len(text) > MAX_CAPTURE_TEXT_CHARS,
+    }
+
+
+def build_capture_artifact(row: dict[str, str], child_markdown: str, fetched: dict[str, object], values: dict[str, str]) -> tuple[str, str]:
+    capture_id = _plain_cell(row.get("id"))
+    source_url = _plain_cell(row.get("source"))
+    source_kind = _plain_cell(row.get("source kind")) or "url"
+    title = _capture_title(row, child_markdown, fetched)
+    target_slug = _target_slug(row, title)
+    instructions = _extract_capture_instructions(child_markdown, row)
+    text_excerpt = str(fetched.get("text_excerpt") or "").strip()
+    artifact = f"""---
+type: captured-source
+title: {json.dumps(title, ensure_ascii=False)}
+status: captured
+capture_id: {capture_id}
+source_url: {json.dumps(source_url, ensure_ascii=False)}
+source_kind: {json.dumps(source_kind, ensure_ascii=False)}
+captured_at: '{iso_now()}'
+capture_invocation_id: {json.dumps(values["invocation_id"], ensure_ascii=False)}
+tags:
+- capture-link
+- memory-stargraph
+- source
+---
+
+# {title}
+
+Source: {source_url}
+Capture request: [[{capture.node_slug(row) or ''}]]
+Invocation: {values["invocation_id"]}
+
+## Capture Instructions
+
+{instructions or "No extra instructions were provided."}
+
+## Host Runner Evidence
+
+- Fetch status: {fetched.get("status")}
+- Bytes read: {fetched.get("bytes_read")}
+- Bytes truncated: {str(fetched.get("bytes_truncated")).lower()}
+- Text truncated: {str(fetched.get("text_truncated")).lower()}
+- Artifact policy: bounded source excerpt only; no private snippets, secrets, raw prompts, or task-local fallback.
+
+## Bounded Source Excerpt
+
+{text_excerpt or "No readable source text was extracted from the bounded fetch."}
+"""
+    return target_slug, artifact
+
+
+def drain_frozen_capture_rows(
+    root: Path,
+    values: dict[str, str],
+    run_slug: str,
+    report_slug: str,
+    snapshot: dict[str, object],
+    base_evidence: dict[str, object],
+) -> dict[str, object]:
+    raw_rows = snapshot.get("rows", [])
+    if not isinstance(raw_rows, list):
+        raise RunnerPhaseError("capture_drain", "snapshot rows malformed")
+    rows = sorted(raw_rows, key=capture.item_number)
+    outcomes: list[dict[str, object]] = []
+    failures: list[dict[str, object]] = []
+    reservations: list[dict[str, object]] = []
+    frozen_ids: list[str] = []
+    total = len(rows)
+    for index, row_obj in enumerate(rows, 1):
+        if not isinstance(row_obj, dict):
+            raise RunnerPhaseError("capture_drain", f"snapshot row {index} malformed")
+        row = {str(key): str(value) for key, value in row_obj.items()}
+        capture_id = _plain_cell(row.get("id"))
+        frozen_ids.append(capture_id or f"row-{index}")
+        if not capture_id:
+            raise RunnerPhaseError("capture_drain", f"snapshot row {index} missing id")
+        if row.get("status") != "planned":
+            raise RunnerPhaseError("capture_drain", f"{capture_id} snapshot status {row.get('status')!r} is not planned")
+        child_slug = capture.node_slug(row)
+        if not child_slug:
+            raise RunnerPhaseError("capture_drain", f"{capture_id} missing child node")
+        source_url = _plain_cell(row.get("source"))
+        if not source_url:
+            raise RunnerPhaseError("capture_drain", f"{capture_id} missing source URL")
+        reserved = False
+        reservation: dict[str, object] | None = None
+        try:
+            write_phase_state(root, values, "capture_reservation", processed=index, total=total, extra={"capture_id": capture_id, "child_slug": child_slug})
+            reservation_transition = capture.apply_transition(
+                capture_id,
+                "planned",
+                "capturing",
+                f"host runner reserved frozen snapshot row {capture_id} for invocation {values['invocation_id']}",
+                pacific_now(),
+            )
+            reservation = {
+                **reservation_transition,
+                "capture_id": capture_id,
+                "reservation_status": "persisted_before_mutation",
+                "readback_verified": True,
+            }
+            reservations.append(reservation)
+            reserved = True
+            update_active_lifecycle(
+                values,
+                run_slug,
+                report_slug,
+                {**base_evidence, "capture_reservations": reservations, "capture_drain_frozen_ids": frozen_ids},
+            )
+
+            write_phase_state(root, values, "capture_source_fetch", processed=index, total=total, extra={"capture_id": capture_id, "source_url": source_url})
+            child_markdown = get_entity(child_slug, timeout=60)
+            fetched = fetch_capture_source(source_url)
+            target_slug, artifact = build_capture_artifact(row, child_markdown, fetched, values)
+
+            write_phase_state(root, values, "capture_artifact_persistence", processed=index, total=total, extra={"capture_id": capture_id, "target_slug": target_slug})
+            put_entity(target_slug, artifact)
+            capture.link(child_slug, target_slug, "captured_as")
+            capture.link(target_slug, child_slug, "capture_result_for")
+
+            write_phase_state(root, values, "capture_terminal_transition", processed=index, total=total, extra={"capture_id": capture_id, "target_slug": target_slug})
+            completed_transition = capture.apply_transition(
+                capture_id,
+                "capturing",
+                "completed",
+                f"host runner captured frozen snapshot row into [[{target_slug}]] for invocation {values['invocation_id']}",
+                pacific_now(),
+            )
+            outcomes.append({
+                "capture_id": capture_id,
+                "child_slug": child_slug,
+                "target_slug": target_slug,
+                "source_url": source_url,
+                "result": "completed",
+                "reservation": reservation,
+                "transition": completed_transition,
+                "fetch": {
+                    "status": fetched.get("status"),
+                    "bytes_read": fetched.get("bytes_read"),
+                    "bytes_truncated": fetched.get("bytes_truncated"),
+                    "text_truncated": fetched.get("text_truncated"),
+                    "title": fetched.get("title"),
+                },
+                "readback_verified": True,
+            })
+        except Exception as exc:
+            failure: dict[str, object] = {
+                "capture_id": capture_id,
+                "child_slug": child_slug,
+                "result": "failed",
+                "error": str(exc),
+                "reserved_before_failure": reserved,
+                "readback_verified": False,
+            }
+            if reserved:
+                try:
+                    failed_transition = capture.apply_transition(
+                        capture_id,
+                        "capturing",
+                        "failed",
+                        f"host runner failed frozen snapshot row {capture_id}: {str(exc)[:300]}",
+                        pacific_now(),
+                    )
+                    failure["terminal_transition"] = failed_transition
+                    failure["readback_verified"] = True
+                except Exception as transition_exc:
+                    failure["terminal_transition_error"] = str(transition_exc)
+                    failures.append(failure)
+                    raise RunnerPhaseError("capture_drain", f"{capture_id} failed and terminal transition failed: {transition_exc}") from transition_exc
+            else:
+                raise RunnerPhaseError("capture_drain", f"{capture_id} reservation failed: {exc}") from exc
+            failures.append(failure)
+    all_frozen_terminal = len(outcomes) + len(failures) == total and all(bool(item.get("readback_verified")) for item in [*outcomes, *failures])
+    result = "completed_non_empty_snapshot_drain" if not failures else "completed_non_empty_snapshot_drain_with_failures"
+    return {
+        "mode": "capture_drain",
+        "result": result,
+        "snapshot_row_count": total,
+        "frozen_ids": frozen_ids,
+        "deterministic_ordering": "capture_id_numeric_ascending",
+        "reservations": reservations,
+        "outcomes": outcomes,
+        "failures": failures,
+        "metrics": {
+            "frozen_rows": total,
+            "completed_items": len(outcomes),
+            "failed_items": len(failures),
+            "terminal_items": len(outcomes) + len(failures),
+        },
+        "all_frozen_terminal": all_frozen_terminal,
+        "task_local_network_required": False,
+        "mutated_only_frozen_snapshot": True,
+    }
+
+
 def run_empty_queue_enrichment(root: Path, values: dict[str, str], run_slug: str, report_slug: str, base_evidence: dict[str, object]) -> dict[str, object]:
     write_phase_state(root, values, "candidate_listing", processed=0, total=7)
     selection = inspect_enrichment_candidates(root=root, values=values)
@@ -1052,6 +1334,7 @@ def run_capture_link_drain(root: Path, values: dict[str, str], claim: dict[str, 
     ownership = runner_identity(root)
     first_compaction: dict[str, object] | None = None
     snapshot: dict[str, object] | None = None
+    capture_drain: dict[str, object] | None = None
     enrichment: dict[str, object] | None = None
     phase = "source_validation"
     try:
@@ -1079,18 +1362,21 @@ def run_capture_link_drain(root: Path, values: dict[str, str], claim: dict[str, 
             raise RunnerPhaseError(phase, "mode capture_drain requested but snapshot is empty")
         if mode == "empty_queue_enrichment" and rows:
             raise RunnerPhaseError(phase, "mode empty_queue_enrichment requested but snapshot is non-empty")
+        base = {
+            "host_commit": commit,
+            "runner": "host-managed-spool",
+            "task_local_network_required": False,
+            "runner_ownership": ownership,
+            "request_claim": claim,
+            "snapshot": snapshot,
+        }
         if rows:
-            result = "non_empty_snapshot_requires_host_capture_extension"
-            status = "failed"
+            phase = "capture_drain"
+            write_phase_state(root, values, phase, processed=0, total=len(rows), extra={"snapshot": snapshot})
+            capture_drain = drain_frozen_capture_rows(root, values, run_slug, report_slug, snapshot, base)
+            result = str(capture_drain["result"])
+            status = "completed" if capture_drain.get("all_frozen_terminal") else "failed"
         else:
-            base = {
-                "host_commit": commit,
-                "runner": "host-managed-spool",
-                "task_local_network_required": False,
-                "runner_ownership": ownership,
-                "request_claim": claim,
-                "snapshot": snapshot,
-            }
             enrichment = run_empty_queue_enrichment(root, values, run_slug, report_slug, base)
             result = str(enrichment["result"])
             status = "completed"
@@ -1107,6 +1393,7 @@ def run_capture_link_drain(root: Path, values: dict[str, str], claim: dict[str, 
             "task_local_network_required": False,
             "runner_ownership": ownership,
             "request_claim": claim,
+            "capture_drain": capture_drain,
             "enrichment": enrichment,
             "progress": read_runner_state(root),
         }
@@ -1129,6 +1416,7 @@ def run_capture_link_drain(root: Path, values: dict[str, str], claim: dict[str, 
             "task_local_network_required": False,
             "runner_ownership": ownership,
             "request_claim": claim,
+            "capture_drain": capture_drain,
             "enrichment": enrichment,
             "progress": read_runner_state(root),
         }
