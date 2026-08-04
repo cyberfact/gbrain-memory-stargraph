@@ -30,16 +30,30 @@ const appUrl = process.env.MEMORY_STARGRAPH_URL || "https://127.0.0.1:8788";
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, ignoreHTTPSErrors: true });
 
-try {
-  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => window.__MEMORY_STARGRAPH__?.getState().graph?.nodes?.length > 0, null, { timeout: 120000 });
-  await page.waitForFunction(() => Boolean(window.__MEMORY_STARGRAPH__?.getState().focusSlug), null, { timeout: 30000 });
+async function openSearchWithMouseAndAssertFocus() {
   await page.click("#navSearchButton");
   await page.waitForFunction(() => {
     const input = document.querySelector("#searchInput");
     const flyout = document.querySelector("#searchFlyout");
-    return Boolean(input && flyout && !flyout.hidden && !input.disabled && input.offsetParent !== null);
+    return Boolean(input && flyout && !flyout.hidden && !input.disabled && input.offsetParent !== null && document.activeElement === input);
   }, null, { timeout: 1000 });
+}
+
+async function openSearchWithKeyboardAndAssertFocus() {
+  await page.focus("#navSearchButton");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => {
+    const input = document.querySelector("#searchInput");
+    const flyout = document.querySelector("#searchFlyout");
+    return Boolean(input && flyout && !flyout.hidden && !input.disabled && input.offsetParent !== null && document.activeElement === input);
+  }, null, { timeout: 1000 });
+}
+
+try {
+  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => window.__MEMORY_STARGRAPH__?.getState().graph?.nodes?.length > 0, null, { timeout: 120000 });
+  await page.waitForFunction(() => Boolean(window.__MEMORY_STARGRAPH__?.getState().focusSlug), null, { timeout: 30000 });
+  await openSearchWithMouseAndAssertFocus();
   await page.fill("#searchInput", "optional timeout telemetry is not a todo");
   const state = await page.evaluate(() => {
     const input = document.querySelector("#searchInput");
@@ -73,6 +87,11 @@ try {
     && state.followupsCount === 1;
   console.log(JSON.stringify(state, null, 2));
   if (!ok) throw new Error(`Search rail did not open an enabled focused surface: ${JSON.stringify(state)}`);
+
+  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => window.__MEMORY_STARGRAPH__?.getState().graph?.nodes?.length > 0, null, { timeout: 120000 });
+  await page.waitForFunction(() => Boolean(window.__MEMORY_STARGRAPH__?.getState().focusSlug), null, { timeout: 30000 });
+  await openSearchWithKeyboardAndAssertFocus();
 } finally {
   await browser.close();
 }

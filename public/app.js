@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.184";
+const UI_VERSION = "V1.0.185";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -1385,6 +1385,17 @@ function positionFloatingPanel(panel, button) {
 function showFloatingPanel(panel, button) {
   hideFloatingPanels(panel);
   setFlyoutOpen(panel, button, true);
+}
+
+function focusSearchInputAfterOpen() {
+  const focusIfReady = () => {
+    if (!searchInput || !searchFlyout || searchFlyout.hidden || searchInput.disabled) return;
+    searchInput.focus({ preventScroll: true });
+  };
+  focusIfReady();
+  window.requestAnimationFrame(focusIfReady);
+  window.setTimeout(focusIfReady, 0);
+  window.setTimeout(focusIfReady, 80);
 }
 
 function targetIsInsideFloatingPanel(target) {
@@ -7487,7 +7498,7 @@ function bindEvents() {
     event.stopPropagation();
     showFloatingPanel(searchFlyout, navSearchButton);
     if (searchFlyout && !searchFlyout.hidden) {
-      window.setTimeout(() => searchInput?.focus(), 0);
+      focusSearchInputAfterOpen();
     }
   });
 
