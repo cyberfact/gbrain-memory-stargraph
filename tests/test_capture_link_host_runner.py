@@ -55,6 +55,14 @@ tags:
             mock.patch.object(runner, "mutate_tag"),
             mock.patch.object(runner, "read_tags", return_value=["capture-link", "curator", "host-runner", "completed"]),
             mock.patch.object(runner, "get_entity", side_effect=terminal_markdown),
+            mock.patch.object(runner, "global_active_tag_readback", return_value={
+                "source": runner.GLOBAL_ACTIVE_TAG_READBACK_SOURCE,
+                "readback_at": "2026-08-08T08:00:00-07:00",
+                "attempt": 1,
+                "active_tag_count": 0,
+                "active_tag_pages": [],
+                "active_tags_clear": True,
+            }),
         )
 
     def gbrain_entity_mocks(self, pages):
@@ -174,6 +182,7 @@ tags:
                 self.lifecycle_mocks()[1] as mutate_tag,
                 self.lifecycle_mocks()[2],
                 self.lifecycle_mocks()[3],
+                self.lifecycle_mocks()[4],
                 mock.patch.object(runner, "inspect_enrichment_candidates", return_value={
                     "selection_version": runner.ENRICHMENT_SELECTION_VERSION,
                     "inspected_scope": [],
@@ -420,6 +429,7 @@ tags:
                 self.lifecycle_mocks()[1] as mutate_tag,
                 self.lifecycle_mocks()[2],
                 self.lifecycle_mocks()[3],
+                self.lifecycle_mocks()[4],
             ):
                 runner.process_one(root)
             result = runner.read_status(root, "sg0176-test-0001")
@@ -537,6 +547,7 @@ tags:
                 mock.patch.dict(os.environ, {"MEMORY_STARGRAPH_CAPTURE_RUNNER_ENABLED": "1"}),
                 self.lifecycle_mocks()[1],
                 self.lifecycle_mocks()[2],
+                self.lifecycle_mocks()[4],
             ):
                 runner.process_one(root)
 
@@ -703,6 +714,14 @@ tags:
             mock.patch.object(runner, "mutate_tag") as mutate_tag,
             mock.patch.object(runner, "read_tags", return_value=["capture-link", "completed", "curator", "host-runner"]),
             mock.patch.object(runner, "get_entity", side_effect=fake_get),
+            mock.patch.object(runner, "global_active_tag_readback", return_value={
+                "source": runner.GLOBAL_ACTIVE_TAG_READBACK_SOURCE,
+                "readback_at": "2026-08-08T08:00:00-07:00",
+                "attempt": 1,
+                "active_tag_count": 0,
+                "active_tag_pages": [],
+                "active_tags_clear": True,
+            }),
         ):
             evidence = runner.terminalize_lifecycle(
                 values,
@@ -714,6 +733,8 @@ tags:
             )
 
         self.assertTrue(evidence["lifecycle_tags_released"])
+        self.assertTrue(evidence["global_active_tag_readback"]["active_tags_clear"])
+        self.assertEqual(evidence["global_active_tag_readback"]["active_tag_count"], 0)
         self.assertEqual(evidence["entities"][run_slug]["stale_lifecycle_tags"], [])
         self.assertEqual(evidence["entities"][report_slug]["stale_lifecycle_tags"], [])
         mutate_tag.assert_has_calls([
@@ -749,6 +770,14 @@ tags:
             mock.patch.object(runner, "mutate_tag"),
             mock.patch.object(runner, "read_tags", return_value=["capture-link", "failed", "curator", "host-runner"]),
             mock.patch.object(runner, "get_entity", side_effect=fake_get),
+            mock.patch.object(runner, "global_active_tag_readback", return_value={
+                "source": runner.GLOBAL_ACTIVE_TAG_READBACK_SOURCE,
+                "readback_at": "2026-08-08T08:00:00-07:00",
+                "attempt": 1,
+                "active_tag_count": 0,
+                "active_tag_pages": [],
+                "active_tags_clear": True,
+            }),
         ):
             evidence = runner.terminalize_lifecycle(
                 values,
@@ -760,6 +789,7 @@ tags:
             )
         self.assertTrue(evidence["entities"][run_slug]["terminal_lease_fields_verified"])
         self.assertEqual(evidence["entities"][run_slug]["stale_lifecycle_tags"], [])
+        self.assertTrue(evidence["global_active_tag_readback"]["active_tags_clear"])
 
     def test_terminalize_lifecycle_retries_delayed_tag_readback_before_reporting_completion(self):
         values = runner.validate_request(self.make_request())
@@ -790,6 +820,14 @@ tags:
             mock.patch.object(runner, "mutate_tag"),
             mock.patch.object(runner, "read_tags", side_effect=tag_reads),
             mock.patch.object(runner, "get_entity", side_effect=fake_get),
+            mock.patch.object(runner, "global_active_tag_readback", return_value={
+                "source": runner.GLOBAL_ACTIVE_TAG_READBACK_SOURCE,
+                "readback_at": "2026-08-08T08:00:00-07:00",
+                "attempt": 1,
+                "active_tag_count": 0,
+                "active_tag_pages": [],
+                "active_tags_clear": True,
+            }),
             mock.patch.object(runner.time, "sleep") as sleep,
         ):
             evidence = runner.terminalize_lifecycle(
@@ -802,6 +840,51 @@ tags:
             )
         self.assertEqual(evidence["entities"][run_slug]["attempt"], 2)
         sleep.assert_called_once_with(runner.TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS)
+
+    def test_global_active_tag_readback_parses_empty_and_active_rows(self):
+        empty = runner.subprocess.CompletedProcess(["gbrain", "list", "--tag", "active"], 0, "No pages found.\n", "")
+        active = runner.subprocess.CompletedProcess(
+            ["gbrain", "list", "--tag", "active"],
+            0,
+            "runs/a\trun\t2026-08-08\tActive A\nreports/b\treport\t2026-08-08\tActive B\n",
+            "",
+        )
+        with mock.patch.object(runner, "run_gbrain", return_value=empty):
+            self.assertEqual(runner.list_active_tag_pages(), [])
+            evidence = runner.global_active_tag_readback()
+            self.assertTrue(evidence["active_tags_clear"])
+            self.assertEqual(evidence["active_tag_count"], 0)
+        with mock.patch.object(runner, "run_gbrain", return_value=active):
+            self.assertEqual(
+                runner.list_active_tag_pages(),
+                [
+                    {"slug": "runs/a", "type": "run", "updated": "2026-08-08", "title": "Active A"},
+                    {"slug": "reports/b", "type": "report", "updated": "2026-08-08", "title": "Active B"},
+                ],
+            )
+
+    def test_global_active_tag_readback_fails_closed_when_non_empty_or_unavailable(self):
+        active = runner.subprocess.CompletedProcess(
+            ["gbrain", "list", "--tag", "active"],
+            0,
+            "runs/stale\trun\t2026-08-08\tStale Active\n",
+            "",
+        )
+        unavailable = runner.subprocess.CompletedProcess(
+            ["gbrain", "list", "--tag", "active"],
+            1,
+            "",
+            "transport unavailable",
+        )
+        with (
+            mock.patch.object(runner, "run_gbrain", return_value=active),
+            mock.patch.object(runner.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(runner.RunnerError, "global active tag readback not clear"):
+                runner.global_active_tag_readback()
+        with mock.patch.object(runner, "run_gbrain", return_value=unavailable):
+            with self.assertRaisesRegex(runner.RunnerError, "gbrain active tag list failed"):
+                runner.global_active_tag_readback()
 
     def test_terminalize_lifecycle_rejects_stale_active_or_implementing_tag_readback(self):
         values = runner.validate_request(self.make_request())

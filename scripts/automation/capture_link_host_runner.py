@@ -47,6 +47,7 @@ MAX_CAPTURE_FETCH_SECONDS = 30
 TERMINAL_LIFECYCLE_TAGS = ("active", "implementing")
 TERMINAL_LIFECYCLE_READBACK_ATTEMPTS = 5
 TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS = 1
+GLOBAL_ACTIVE_TAG_READBACK_SOURCE = "gbrain list --tag active"
 
 
 class RunnerError(RuntimeError):
@@ -217,6 +218,47 @@ def read_tags(slug: str) -> list[str]:
     return tags
 
 
+def list_active_tag_pages() -> list[dict[str, str]]:
+    result = run_gbrain(["list", "--tag", "active"], timeout=60)
+    if result.returncode != 0:
+        raise RunnerError(f"gbrain active tag list failed: {result_error(result)}")
+    pages: list[dict[str, str]] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped == "No pages found.":
+            continue
+        parts = stripped.split("\t")
+        pages.append(
+            {
+                "slug": parts[0],
+                "type": parts[1] if len(parts) > 1 else "",
+                "updated": parts[2] if len(parts) > 2 else "",
+                "title": parts[3] if len(parts) > 3 else parts[0],
+            }
+        )
+    return pages
+
+
+def global_active_tag_readback() -> dict[str, object]:
+    last: dict[str, object] = {}
+    for attempt in range(1, TERMINAL_LIFECYCLE_READBACK_ATTEMPTS + 1):
+        readback_at = iso_now()
+        pages = list_active_tag_pages()
+        last = {
+            "source": GLOBAL_ACTIVE_TAG_READBACK_SOURCE,
+            "readback_at": readback_at,
+            "attempt": attempt,
+            "active_tag_count": len(pages),
+            "active_tag_pages": pages,
+            "active_tags_clear": len(pages) == 0,
+        }
+        if not pages:
+            return last
+        if attempt < TERMINAL_LIFECYCLE_READBACK_ATTEMPTS:
+            time.sleep(TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS)
+    raise RunnerError(f"global active tag readback not clear: {last}")
+
+
 def terminal_lifecycle_tag_evidence(
     slug: str,
     *,
@@ -271,6 +313,7 @@ def clear_terminal_lifecycle_tags(slugs: list[tuple[str, bool]], status: str, re
             expected_result=result,
             expect_curator_lease=expect_curator_lease,
         )
+    evidence["global_active_tag_readback"] = global_active_tag_readback()
     evidence["lifecycle_tags_released"] = True
     return evidence
 
