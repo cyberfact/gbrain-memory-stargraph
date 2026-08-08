@@ -487,7 +487,28 @@ def terminalize_lifecycle(
         status,
         result,
     )
-    return {**lifecycle, **lifecycle_readback}
+    final_lifecycle = {
+        **lifecycle,
+        **lifecycle_readback,
+    }
+    put_entity(
+        run_slug,
+        build_run_markdown(values, run_slug, report_slug, status=status, result=result, evidence=final_lifecycle),
+    )
+    put_entity(
+        report_slug,
+        build_report_markdown(values, run_slug, report_slug, status=status, result=result, evidence=final_lifecycle),
+    )
+    final_readback = clear_terminal_lifecycle_tags(
+        [(run_slug, True), (report_slug, False)],
+        status,
+        result,
+    )
+    return {
+        **final_lifecycle,
+        "final_terminal_readback": final_readback,
+        "global_active_tag_readback": final_readback["global_active_tag_readback"],
+    }
 
 
 def make_request(invocation_id: str, expected_commit: str, mode: str, nonce: str | None = None) -> dict[str, object]:

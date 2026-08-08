@@ -215,7 +215,7 @@ tags:
             self.assertTrue(result["evidence"]["runner_ownership"]["configured_remote_runner_disabled"])
             self.assertIn("run_slug", result["evidence"])
             self.assertIn("report_slug", result["evidence"])
-            self.assertEqual(put_entity.call_count, 3)
+            self.assertEqual(put_entity.call_count, 5)
             report_slug = result["evidence"]["report_slug"]
             mutate_tag.assert_has_calls([
                 mock.call("runs/memory-stargraph-capture-link-drain-sg0176-test-0001", "active", "add"),
@@ -710,7 +710,7 @@ tags:
 """
 
         with (
-            mock.patch.object(runner, "put_entity"),
+            mock.patch.object(runner, "put_entity") as put_entity,
             mock.patch.object(runner, "mutate_tag") as mutate_tag,
             mock.patch.object(runner, "read_tags", return_value=["capture-link", "completed", "curator", "host-runner"]),
             mock.patch.object(runner, "get_entity", side_effect=fake_get),
@@ -735,8 +735,11 @@ tags:
         self.assertTrue(evidence["lifecycle_tags_released"])
         self.assertTrue(evidence["global_active_tag_readback"]["active_tags_clear"])
         self.assertEqual(evidence["global_active_tag_readback"]["active_tag_count"], 0)
+        self.assertTrue(evidence["final_terminal_readback"]["global_active_tag_readback"]["active_tags_clear"])
         self.assertEqual(evidence["entities"][run_slug]["stale_lifecycle_tags"], [])
         self.assertEqual(evidence["entities"][report_slug]["stale_lifecycle_tags"], [])
+        self.assertIn('"global_active_tag_readback"', put_entity.call_args_list[-2].args[1])
+        self.assertIn('"active_tags_clear": true', put_entity.call_args_list[-2].args[1])
         mutate_tag.assert_has_calls([
             mock.call(run_slug, "active", "remove"),
             mock.call(run_slug, "implementing", "remove"),
@@ -797,6 +800,8 @@ tags:
         report_slug = "reports/memory-stargraph-capture-link-drain-2026-08-08-sg0176-test-0001"
         tag_reads = [
             ["active", "implementing", "capture-link", "completed"],
+            ["capture-link", "completed"],
+            ["capture-link", "completed"],
             ["capture-link", "completed"],
             ["capture-link", "completed"],
         ]
