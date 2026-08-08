@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 import subprocess
 import tempfile
@@ -950,6 +951,12 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(fake_store.calls[-1], ("get_seed_graph", False))
 
     def test_weekly_memory_value_digest_reports_verified_outcomes(self):
+        class FixedDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = dt.datetime(2026, 8, 3, 12, 0, tzinfo=dt.timezone.utc)
+                return value if tz is None else value.astimezone(tz)
+
         fake_store = FakeStore()
         evidence = {
             "notes/memory-starmap-todo-list": (
@@ -997,6 +1004,7 @@ class ApiEndpointTests(unittest.TestCase):
                 "server.resolver_feedback_health",
                 return_value={"pending": 0, "events_24h": 2},
             ),
+            mock.patch("server.datetime", FixedDateTime),
         ):
             status, data = self.dispatch_get("/api/memory-value-digest?window=week")
 

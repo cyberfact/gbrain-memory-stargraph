@@ -21,10 +21,40 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
         return payload
 
     def lifecycle_mocks(self):
+        def terminal_markdown(slug):
+            if slug.startswith("runs/"):
+                return """---
+type: run
+status: completed
+result: completed_empty_snapshot_no_eligible_candidates
+curator_lease: false
+active_change: false
+tags:
+  - capture-link
+  - completed
+  - curator
+  - host-runner
+---
+# Completed run
+"""
+            return """---
+type: report
+status: completed
+result: completed_empty_snapshot_no_eligible_candidates
+active_change: false
+tags:
+  - capture-link
+  - completed
+  - curator
+  - host-runner
+---
+# Completed report
+"""
         return (
             mock.patch.object(runner, "put_entity"),
             mock.patch.object(runner, "mutate_tag"),
             mock.patch.object(runner, "read_tags", return_value=["capture-link", "curator", "host-runner", "completed"]),
+            mock.patch.object(runner, "get_entity", side_effect=terminal_markdown),
         )
 
     def gbrain_entity_mocks(self, pages):
@@ -143,6 +173,7 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
                 self.lifecycle_mocks()[0] as put_entity,
                 self.lifecycle_mocks()[1] as mutate_tag,
                 self.lifecycle_mocks()[2],
+                self.lifecycle_mocks()[3],
                 mock.patch.object(runner, "inspect_enrichment_candidates", return_value={
                     "selection_version": runner.ENRICHMENT_SELECTION_VERSION,
                     "inspected_scope": [],
@@ -176,10 +207,16 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
             self.assertIn("run_slug", result["evidence"])
             self.assertIn("report_slug", result["evidence"])
             self.assertEqual(put_entity.call_count, 3)
+            report_slug = result["evidence"]["report_slug"]
             mutate_tag.assert_has_calls([
                 mock.call("runs/memory-stargraph-capture-link-drain-sg0176-test-0001", "active", "add"),
                 mock.call("runs/memory-stargraph-capture-link-drain-sg0176-test-0001", "active", "remove"),
+                mock.call("runs/memory-stargraph-capture-link-drain-sg0176-test-0001", "implementing", "remove"),
+                mock.call(report_slug, "active", "remove"),
+                mock.call(report_slug, "implementing", "remove"),
             ])
+            lifecycle = result["evidence"]["entities"]
+            self.assertEqual(lifecycle["runs/memory-stargraph-capture-link-drain-sg0176-test-0001"]["stale_lifecycle_tags"], [])
             self.assertTrue((root / "logs" / "runner.jsonl").exists())
 
     def test_empty_snapshot_enriches_two_candidates_after_reservation_readback(self):
@@ -382,6 +419,7 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
                 self.lifecycle_mocks()[0],
                 self.lifecycle_mocks()[1] as mutate_tag,
                 self.lifecycle_mocks()[2],
+                self.lifecycle_mocks()[3],
             ):
                 runner.process_one(root)
             result = runner.read_status(root, "sg0176-test-0001")
@@ -435,6 +473,38 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
                 if "memory-stargraph-captures" in slug:
                     self.assertIn("Example Source", markdown)
 
+            def fake_get(slug, timeout=120):
+                if slug.startswith("runs/"):
+                    return """---
+type: run
+status: completed
+result: completed_non_empty_snapshot_drain
+curator_lease: false
+active_change: false
+tags:
+  - capture-link
+  - completed
+  - curator
+  - host-runner
+---
+# Run
+"""
+                if slug.startswith("reports/"):
+                    return """---
+type: report
+status: completed
+result: completed_non_empty_snapshot_drain
+active_change: false
+tags:
+  - capture-link
+  - completed
+  - curator
+  - host-runner
+---
+# Report
+"""
+                return "---\ntype: capture\nstatus: capturing\n---\n# CAP\n\n## Capture Instructions\n\nCapture example source.\n"
+
             with (
                 mock.patch.object(runner, "current_commit", return_value="abc123"),
                 mock.patch.object(runner.capture, "apply_compaction", return_value={"created_archives": []}),
@@ -452,7 +522,7 @@ class CaptureLinkHostRunnerTests(unittest.TestCase):
                     }],
                 }),
                 mock.patch.object(runner.capture, "apply_transition", side_effect=fake_transition),
-                mock.patch.object(runner, "get_entity", return_value="---\ntype: capture\nstatus: capturing\n---\n# CAP\n\n## Capture Instructions\n\nCapture example source.\n"),
+                mock.patch.object(runner, "get_entity", side_effect=fake_get),
                 mock.patch.object(runner, "fetch_capture_source", return_value={
                     "status": "fetched",
                     "source_url": "https://example.com/source",
@@ -593,20 +663,174 @@ Capture the Salesforce article 'Toward Self-Improving Agents' with source proven
         self.assertIn("https://www.salesforce.com/news/stories/toward-self-improving-agents/", artifact)
         self.assertIn("Self-improving agents need verification", artifact)
 
-    def test_terminalize_lifecycle_rejects_active_tag_readback(self):
+    def test_terminalize_lifecycle_clears_active_and_implementing_tags_on_completed_run_and_report(self):
+        values = runner.validate_request(self.make_request())
+        run_slug = "runs/memory-stargraph-capture-link-drain-sg0176-test-0001"
+        report_slug = "reports/memory-stargraph-capture-link-drain-2026-08-08-sg0176-test-0001"
+
+        def fake_get(slug):
+            if slug == run_slug:
+                return """---
+type: run
+status: completed
+result: completed_empty_snapshot_enrichment
+curator_lease: false
+active_change: false
+tags:
+  - capture-link
+  - completed
+  - curator
+  - host-runner
+---
+# Run
+"""
+            return """---
+type: report
+status: completed
+result: completed_empty_snapshot_enrichment
+active_change: false
+tags:
+  - capture-link
+  - completed
+  - curator
+  - host-runner
+---
+# Report
+"""
+
+        with (
+            mock.patch.object(runner, "put_entity"),
+            mock.patch.object(runner, "mutate_tag") as mutate_tag,
+            mock.patch.object(runner, "read_tags", return_value=["capture-link", "completed", "curator", "host-runner"]),
+            mock.patch.object(runner, "get_entity", side_effect=fake_get),
+        ):
+            evidence = runner.terminalize_lifecycle(
+                values,
+                run_slug,
+                report_slug,
+                "completed",
+                "completed_empty_snapshot_enrichment",
+                {"snapshot": {"rows": []}},
+            )
+
+        self.assertTrue(evidence["lifecycle_tags_released"])
+        self.assertEqual(evidence["entities"][run_slug]["stale_lifecycle_tags"], [])
+        self.assertEqual(evidence["entities"][report_slug]["stale_lifecycle_tags"], [])
+        mutate_tag.assert_has_calls([
+            mock.call(run_slug, "active", "remove"),
+            mock.call(run_slug, "implementing", "remove"),
+            mock.call(report_slug, "active", "remove"),
+            mock.call(report_slug, "implementing", "remove"),
+        ])
+
+    def test_terminalize_lifecycle_clears_lifecycle_tags_on_failed_path(self):
+        values = runner.validate_request(self.make_request())
+        run_slug = "runs/memory-stargraph-capture-link-drain-sg0176-test-0001"
+        report_slug = "reports/memory-stargraph-capture-link-drain-2026-08-08-sg0176-test-0001"
+
+        def fake_get(slug):
+            frontmatter = "curator_lease: false\n" if slug == run_slug else ""
+            return f"""---
+type: {'run' if slug == run_slug else 'report'}
+status: failed
+result: compaction_before_snapshot_failed
+{frontmatter}active_change: false
+tags:
+  - capture-link
+  - failed
+  - curator
+  - host-runner
+---
+# Terminal
+"""
+
+        with (
+            mock.patch.object(runner, "put_entity"),
+            mock.patch.object(runner, "mutate_tag"),
+            mock.patch.object(runner, "read_tags", return_value=["capture-link", "failed", "curator", "host-runner"]),
+            mock.patch.object(runner, "get_entity", side_effect=fake_get),
+        ):
+            evidence = runner.terminalize_lifecycle(
+                values,
+                run_slug,
+                report_slug,
+                "failed",
+                "compaction_before_snapshot_failed",
+                {"snapshot": {"rows": []}},
+            )
+        self.assertTrue(evidence["entities"][run_slug]["terminal_lease_fields_verified"])
+        self.assertEqual(evidence["entities"][run_slug]["stale_lifecycle_tags"], [])
+
+    def test_terminalize_lifecycle_retries_delayed_tag_readback_before_reporting_completion(self):
+        values = runner.validate_request(self.make_request())
+        run_slug = "runs/memory-stargraph-capture-link-drain-sg0176-test-0001"
+        report_slug = "reports/memory-stargraph-capture-link-drain-2026-08-08-sg0176-test-0001"
+        tag_reads = [
+            ["active", "implementing", "capture-link", "completed"],
+            ["capture-link", "completed"],
+            ["capture-link", "completed"],
+        ]
+
+        def fake_get(slug):
+            return f"""---
+type: {'run' if slug == run_slug else 'report'}
+status: completed
+result: completed_empty_snapshot_enrichment
+curator_lease: false
+active_change: false
+tags:
+  - capture-link
+  - completed
+---
+# Terminal
+"""
+
+        with (
+            mock.patch.object(runner, "put_entity"),
+            mock.patch.object(runner, "mutate_tag"),
+            mock.patch.object(runner, "read_tags", side_effect=tag_reads),
+            mock.patch.object(runner, "get_entity", side_effect=fake_get),
+            mock.patch.object(runner.time, "sleep") as sleep,
+        ):
+            evidence = runner.terminalize_lifecycle(
+                values,
+                run_slug,
+                report_slug,
+                "completed",
+                "completed_empty_snapshot_enrichment",
+                {"snapshot": {"rows": []}},
+            )
+        self.assertEqual(evidence["entities"][run_slug]["attempt"], 2)
+        sleep.assert_called_once_with(runner.TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS)
+
+    def test_terminalize_lifecycle_rejects_stale_active_or_implementing_tag_readback(self):
         values = runner.validate_request(self.make_request())
         with (
             mock.patch.object(runner, "put_entity"),
             mock.patch.object(runner, "mutate_tag"),
-            mock.patch.object(runner, "read_tags", return_value=["active", "capture-link"]),
+            mock.patch.object(runner, "read_tags", return_value=["active", "implementing", "capture-link"]),
+            mock.patch.object(runner, "get_entity", return_value="""---
+type: run
+status: completed
+result: completed_empty_snapshot_enrichment
+curator_lease: false
+active_change: false
+tags:
+  - active
+  - implementing
+  - capture-link
+---
+# Run
+"""),
+            mock.patch.object(runner.time, "sleep"),
         ):
-            with self.assertRaisesRegex(runner.RunnerError, "active tag release failed"):
+            with self.assertRaisesRegex(runner.RunnerError, "terminal lifecycle readback failed"):
                 runner.terminalize_lifecycle(
                     values,
                     "runs/memory-stargraph-capture-link-drain-sg0176-test-0001",
                     "reports/memory-stargraph-capture-link-drain-2026-07-30-sg0176-test-0001",
                     "completed",
-                    "completed_empty_snapshot_noop",
+                    "completed_empty_snapshot_enrichment",
                     {"snapshot": {"rows": []}},
                 )
 

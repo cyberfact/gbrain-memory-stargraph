@@ -44,6 +44,9 @@ MAX_CAPTURE_FETCH_BYTES = 180_000
 MAX_CAPTURE_TEXT_CHARS = 6_000
 MAX_CAPTURE_INSTRUCTION_CHARS = 2_000
 MAX_CAPTURE_FETCH_SECONDS = 30
+TERMINAL_LIFECYCLE_TAGS = ("active", "implementing")
+TERMINAL_LIFECYCLE_READBACK_ATTEMPTS = 5
+TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS = 1
 
 
 class RunnerError(RuntimeError):
@@ -214,6 +217,64 @@ def read_tags(slug: str) -> list[str]:
     return tags
 
 
+def terminal_lifecycle_tag_evidence(
+    slug: str,
+    *,
+    expected_status: str,
+    expected_result: str,
+    expect_curator_lease: bool = True,
+) -> dict[str, object]:
+    last: dict[str, object] = {}
+    for attempt in range(1, TERMINAL_LIFECYCLE_READBACK_ATTEMPTS + 1):
+        tags = read_tags(slug)
+        markdown = get_entity(slug)
+        frontmatter = {
+            "status": frontmatter_value(markdown, "status"),
+            "result": frontmatter_value(markdown, "result"),
+            "active_change": frontmatter_value(markdown, "active_change"),
+        }
+        if expect_curator_lease:
+            frontmatter["curator_lease"] = frontmatter_value(markdown, "curator_lease")
+        stale_tags = [tag for tag in TERMINAL_LIFECYCLE_TAGS if tag in tags]
+        lease_ok = True
+        if frontmatter.get("active_change") not in {False, "false", "False", None}:
+            lease_ok = False
+        if expect_curator_lease and frontmatter.get("curator_lease") not in {False, "false", "False"}:
+            lease_ok = False
+        status_ok = str(frontmatter.get("status") or "") == expected_status
+        result_ok = str(frontmatter.get("result") or "") == expected_result
+        last = {
+            "slug": slug,
+            "attempt": attempt,
+            "tags": tags,
+            "stale_lifecycle_tags": stale_tags,
+            "frontmatter": frontmatter,
+            "terminal_status_verified": status_ok,
+            "terminal_result_verified": result_ok,
+            "terminal_lease_fields_verified": lease_ok,
+        }
+        if not stale_tags and status_ok and result_ok and lease_ok:
+            return last
+        if attempt < TERMINAL_LIFECYCLE_READBACK_ATTEMPTS:
+            time.sleep(TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS)
+    raise RunnerError(f"terminal lifecycle readback failed for {slug}: {last}")
+
+
+def clear_terminal_lifecycle_tags(slugs: list[tuple[str, bool]], status: str, result: str) -> dict[str, object]:
+    evidence: dict[str, object] = {"removed_tags": list(TERMINAL_LIFECYCLE_TAGS), "entities": {}}
+    for slug, expect_curator_lease in slugs:
+        for tag in TERMINAL_LIFECYCLE_TAGS:
+            mutate_tag(slug, tag, "remove")
+        evidence["entities"][slug] = terminal_lifecycle_tag_evidence(
+            slug,
+            expected_status=status,
+            expected_result=result,
+            expect_curator_lease=expect_curator_lease,
+        )
+    evidence["lifecycle_tags_released"] = True
+    return evidence
+
+
 def get_entity(slug: str, timeout: int = 120) -> str:
     result = run_gbrain(["get", slug], timeout=timeout)
     if result.returncode != 0:
@@ -378,11 +439,12 @@ def terminalize_lifecycle(
         report_slug,
         build_report_markdown(values, run_slug, report_slug, status=status, result=result, evidence=lifecycle),
     )
-    mutate_tag(run_slug, "active", "remove")
-    tags = read_tags(run_slug)
-    if "active" in tags:
-        raise RunnerError(f"active tag release failed for {run_slug}")
-    return {**lifecycle, "lifecycle_tags_released": True, "run_tags_after_release": tags}
+    lifecycle_readback = clear_terminal_lifecycle_tags(
+        [(run_slug, True), (report_slug, False)],
+        status,
+        result,
+    )
+    return {**lifecycle, **lifecycle_readback}
 
 
 def make_request(invocation_id: str, expected_commit: str, mode: str, nonce: str | None = None) -> dict[str, object]:
