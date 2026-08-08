@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.185";
+const UI_VERSION = "V1.0.186";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -241,6 +241,7 @@ const settingsDiagnosticsButton = document.getElementById("settingsDiagnosticsBu
 const sampleBrainButton = document.getElementById("sampleBrainButton");
 const memoryDigestButton = document.getElementById("memoryDigestButton");
 const customerReadinessButton = document.getElementById("customerReadinessButton");
+const settingsEvidenceCards = document.getElementById("settingsEvidenceCards");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -4183,6 +4184,94 @@ function renderCustomerReadinessCard(data) {
   return card;
 }
 
+let settingsEvidenceRequestId = 0;
+const SETTINGS_DIGEST_TIMEOUT_MS = 12000;
+const SETTINGS_READINESS_TIMEOUT_MS = 30000;
+
+function renderSettingsEvidenceMessage(message) {
+  if (!settingsEvidenceCards) return;
+  settingsEvidenceCards.innerHTML = "";
+  const note = document.createElement("p");
+  note.className = "settings-evidence-loading";
+  note.textContent = message;
+  settingsEvidenceCards.appendChild(note);
+}
+
+function withSettingsEvidenceTimeout(promise, label, timeoutMs) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      window.setTimeout(() => resolve({
+        ok: false,
+        status: "timeout",
+        data: { error: `${label} timed out after ${Math.round(timeoutMs / 1000)}s` },
+      }), timeoutMs);
+    }),
+  ]);
+}
+
+function renderSettingsUnavailableCard(kind, message) {
+  const card = document.createElement("section");
+  const isReadiness = kind === "readiness";
+  card.className = isReadiness ? "customer-readiness-card" : "verified-outcomes-card";
+  card.setAttribute("aria-label", isReadiness ? "Customer readiness" : "Weekly verified memory outcomes");
+  const header = document.createElement("div");
+  header.className = isReadiness ? "customer-readiness-header" : "verified-outcomes-header";
+  const titleWrap = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = isReadiness ? "Customer readiness" : "Weekly verified memory outcomes";
+  const subtitle = document.createElement("p");
+  subtitle.textContent = isReadiness
+    ? "Readiness evidence is temporarily unavailable."
+    : "Memory value digest evidence is temporarily unavailable.";
+  titleWrap.append(title, subtitle);
+  const status = document.createElement("span");
+  status.className = isReadiness ? "customer-readiness-status is-degraded" : "verified-outcomes-status is-degraded";
+  status.textContent = "Degraded";
+  header.append(titleWrap, status);
+  const detail = document.createElement("p");
+  detail.className = isReadiness ? "customer-readiness-privacy" : "verified-outcomes-privacy";
+  detail.textContent = message || "Evidence request timed out; no private content was exposed.";
+  card.append(header, detail);
+  if (isReadiness) {
+    const targets = document.createElement("p");
+    targets.className = "customer-readiness-privacy";
+    targets.textContent = "Configured targets: unavailable while readiness evidence is degraded.";
+    const next = document.createElement("p");
+    next.className = "customer-readiness-next-step";
+    next.textContent = "Safe next step: Review readiness evidence again after the endpoint responds; no repair or resolver approval was run.";
+    card.append(targets, next);
+  }
+  return card;
+}
+
+async function refreshSettingsEvidenceCards() {
+  if (!settingsEvidenceCards || settingsFlyout?.hidden) return;
+  const requestId = ++settingsEvidenceRequestId;
+  renderSettingsEvidenceMessage("Loading weekly outcomes and customer readiness...");
+  const [digestResponse, readinessResponse] = await Promise.all([
+    withSettingsEvidenceTimeout(apiGet("/api/memory-value-digest?window=week"), "Weekly outcomes", SETTINGS_DIGEST_TIMEOUT_MS),
+    withSettingsEvidenceTimeout(apiGet("/api/customer-readiness"), "Customer readiness", SETTINGS_READINESS_TIMEOUT_MS),
+  ]);
+  if (requestId !== settingsEvidenceRequestId || settingsFlyout?.hidden) return;
+  settingsEvidenceCards.innerHTML = "";
+  if (digestResponse.ok) {
+    settingsEvidenceCards.appendChild(renderVerifiedMemoryOutcomesCard(digestResponse.data || {}));
+  } else {
+    settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("digest", `Weekly outcomes / Memory value digest unavailable: ${digestResponse.data?.error || digestResponse.status}`));
+  }
+  if (readinessResponse.ok) {
+    settingsEvidenceCards.appendChild(renderCustomerReadinessCard(readinessResponse.data || {}));
+  } else {
+    settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("readiness", `Customer readiness unavailable: ${readinessResponse.data?.error || readinessResponse.status}`));
+  }
+}
+
+function openSettingsSurface() {
+  showFloatingPanel(settingsFlyout, navSettingsButton);
+  void refreshSettingsEvidenceCards();
+}
+
 async function openMemoryDigestWindow() {
   hideFloatingPanels();
   modalKicker.textContent = "Memory value";
@@ -7520,7 +7609,8 @@ function bindEvents() {
 
   navSettingsButton?.addEventListener("click", (event) => {
     event.stopPropagation();
-    toggleFloatingPanel(settingsFlyout, navSettingsButton);
+    state.settingsPinned = true;
+    openSettingsSurface();
   });
   navResolverButton?.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -7532,7 +7622,7 @@ function bindEvents() {
   });
 
   navSettingsButton?.addEventListener("mouseenter", () => {
-    showFloatingPanel(settingsFlyout, navSettingsButton);
+    openSettingsSurface();
   });
 
   settingsFlyout?.addEventListener("mouseleave", () => {

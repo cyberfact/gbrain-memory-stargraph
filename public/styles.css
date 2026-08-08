@@ -1361,6 +1361,41 @@ h2 {
   letter-spacing: 0;
 }
 
+.settings-review-section {
+  gap: 8px;
+}
+
+.settings-evidence-cards {
+  display: grid;
+  gap: 10px;
+  max-height: min(50vh, 520px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.settings-evidence-cards .verified-outcomes-card,
+.settings-evidence-cards .customer-readiness-card {
+  margin-bottom: 0;
+  padding: 10px;
+}
+
+.settings-evidence-cards .verified-outcomes-grid,
+.settings-evidence-cards .customer-readiness-grid {
+  grid-template-columns: 1fr;
+}
+
+.settings-evidence-loading,
+.settings-evidence-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-evidence-error {
+  color: #ff9ca8;
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;

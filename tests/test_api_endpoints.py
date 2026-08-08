@@ -955,7 +955,7 @@ class ApiEndpointTests(unittest.TestCase):
             "notes/memory-starmap-todo-list": (
                 "| SG-0184 | completed | P1 | Benchmark | [[notes/benchmark]] | 2026-08-01T07:57:00-07:00 | Completed. |\n"
                 "| SG-0185 | completed | P1 | Search parity | [[notes/search]] | 2026-08-01T21:09:00-07:00 | Completed. |\n"
-                "| SG-0167 | completed | P1 | Ask Yoda model fix | [[notes/superseding]] | 2026-07-29T08:24:28-07:00 | Completed. |\n"
+                "| SG-0167 | completed | P1 | Ask Yoda model fix | [[notes/superseding]] | 2026-08-02T08:24:28-07:00 | Completed. |\n"
                 "| SG-0166 | failed | P1 | Historical blocker | [[notes/failed]] | 2026-07-28T16:08:24-07:00 | Failed. |"
             ),
             "notes/failed": (
