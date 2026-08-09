@@ -224,6 +224,42 @@ class GraphParsingTests(unittest.TestCase):
             "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
         )
 
+    def test_merge_search_results_prefers_query_identity_over_lifecycle_body_score(self):
+        results = merge_search_results(
+            [
+                {
+                    "slug": "notes/memory-starmap-todo-list/persist-global-active-tag-readback-in-capture-link-terminal-results",
+                    "score": 12.0,
+                    "label": "Persist global active tag readback in Capture Link terminal results",
+                    "preview": "UX evidence query optional timeout telemetry is not a todo appeared in a terminal report.",
+                },
+                {
+                    "slug": "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+                    "score": 1.0,
+                    "label": "Optional timeout telemetry is not a todo",
+                    "preview": "",
+                },
+            ],
+            [
+                {
+                    "slug": "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+                    "score": 5.2,
+                    "label": "Optional timeout telemetry is not a todo",
+                    "preview": "Evidence record: 2026-07-28 Optional timeout telemetry is not a todo",
+                }
+            ],
+            "optional timeout telemetry is not a todo",
+        )
+
+        self.assertEqual(
+            results[0]["slug"],
+            "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+        )
+        self.assertIn(
+            "notes/memory-starmap-todo-list/persist-global-active-tag-readback-in-capture-link-terminal-results",
+            [result["slug"] for result in results],
+        )
+
     def test_evidence_search_ignores_low_signal_page_list_matches(self):
         raw_graph = {
             "title": "Memory Stargraph",

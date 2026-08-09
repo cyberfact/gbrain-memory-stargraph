@@ -173,7 +173,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.186"
+UI_VERSION = "V1.0.187"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -2476,9 +2476,30 @@ def merge_search_results(primary_results, evidence_results, query=""):
                 item["score"] = float(item.get("score") or 0) + 10.0
     evidence_order = {result["slug"]: index for index, result in enumerate(evidence_results)}
     primary_order = {result["slug"]: index for index, result in enumerate(primary_results)}
+
+    def identity_relevance(item):
+        normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower()).replace("_", "-")
+        if not normalized_query:
+            return (0, 0, 0, 0)
+        terms = evidence_search_terms(query)
+        slug = str(item.get("slug") or "").lower().replace("_", "-")
+        label = str(item.get("label") or "").lower().replace("_", "-")
+        identity_text = f"{slug} {label}"
+        preview = str(item.get("preview") or "").lower().replace("_", "-")
+        full_text = f"{identity_text} {preview}"
+        identity_phrase = 1 if normalized_query in identity_text else 0
+        full_phrase = 1 if normalized_query in full_text else 0
+        if not terms:
+            return (identity_phrase, full_phrase, 0, 0)
+        identity_matches = sum(1 for term in terms if term in identity_text)
+        full_matches = sum(1 for term in terms if term in full_text)
+        identity_complete = 1 if identity_matches == len(terms) else 0
+        return (identity_phrase, identity_complete, identity_matches, full_phrase + full_matches)
+
     return sorted(
         merged.values(),
         key=lambda item: (
+            identity_relevance(item),
             float(item.get("score") or 0),
             1 if item["slug"] in evidence_order else 0,
             -evidence_order.get(item["slug"], 9999),
