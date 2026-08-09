@@ -13,10 +13,12 @@ import inspect
 import json
 import os
 import re
+import stat
 import sys
 import threading
 import time
 import uuid
+from collections import UserString
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -31,6 +33,31 @@ APPROVED_DECLARATIONS = {
     "agents/timmy-oc": ("Timmy-OC", "hosts/timmy", "collections/timmy-oc-tasks", "collections/timmy-oc-artifacts"),
     "agents/toddy-oc": ("Toddy-OC", "hosts/toddy", "collections/toddy-oc-tasks", "collections/toddy-oc-artifacts"),
 }
+NATS_USER_PASSWORD_SCHEMA = "memory-stargraph.nats-credentials"
+NATS_USER_PASSWORD_FIELDS = frozenset(
+    {"schema", "version", "mode", "user", "password"}
+)
+NATS_CREDENTIALS_MAX_BYTES = 64 * 1024
+
+
+class _SealedNatsRawCredentials(UserString):
+    """In-memory nats-py credentials whose seed never appears in repr/str."""
+
+    def __init__(self, data: str) -> None:
+        object.__setattr__(self, "_sealed", False)
+        super().__init__(data)
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("NATS credentials are immutable")
+        object.__setattr__(self, name, value)
+
+    def __str__(self) -> str:
+        return "<redacted NATS credentials>"
+
+    def __repr__(self) -> str:
+        return "_SealedNatsRawCredentials(<redacted>)"
 MANIFEST_FIELDS = frozenset(
     {
         "slug",
@@ -626,7 +653,6 @@ class NatsJetStreamSession:
         if (
             not servers
             or not bucket
-            or not credentials_file.is_file()
             or connect_timeout_seconds <= 0
             or request_timeout_seconds <= 0
             or connect_timeout_seconds > 30
@@ -639,6 +665,11 @@ class NatsJetStreamSession:
         self.connect = connect
         self.connect_timeout_seconds = connect_timeout_seconds
         self.request_timeout_seconds = request_timeout_seconds
+        (
+            self._auth_mode,
+            self._auth_values,
+            self._credentials_signature,
+        ) = self._load_credentials(credentials_file)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._connection: Any | None = None
         self._jetstream: Any | None = None
@@ -647,6 +678,136 @@ class NatsJetStreamSession:
         self._thread: threading.Thread | None = None
         self._ready: threading.Event | None = None
         self._startup_error: BaseException | None = None
+
+    @staticmethod
+    def _read_private_credentials(path: Path) -> tuple[str, tuple[Any, ...]]:
+        """Read one stable mode-0600 regular file without following symlinks."""
+        try:
+            before = path.lstat()
+            if (
+                stat.S_ISLNK(before.st_mode)
+                or not stat.S_ISREG(before.st_mode)
+                or stat.S_IMODE(before.st_mode) != 0o600
+            ):
+                raise ActivationError("OpenClaw NATS credentials file is unsafe")
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            try:
+                current = os.fstat(descriptor)
+                file_identity = (
+                    current.st_dev,
+                    current.st_ino,
+                    current.st_mode,
+                    current.st_size,
+                    current.st_mtime_ns,
+                )
+                expected = (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_mode,
+                    before.st_size,
+                    before.st_mtime_ns,
+                )
+                if (
+                    file_identity != expected
+                    or current.st_size > NATS_CREDENTIALS_MAX_BYTES
+                ):
+                    raise ActivationError("OpenClaw NATS credentials file is unsafe")
+                chunks = []
+                remaining = NATS_CREDENTIALS_MAX_BYTES + 1
+                while remaining:
+                    chunk = os.read(descriptor, remaining)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                raw = b"".join(chunks)
+                if len(raw) > NATS_CREDENTIALS_MAX_BYTES:
+                    raise ActivationError("OpenClaw NATS credentials file is unsafe")
+                after = os.fstat(descriptor)
+                after_identity = (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_size,
+                    after.st_mtime_ns,
+                )
+                if after_identity != file_identity:
+                    raise ActivationError("OpenClaw NATS credentials file is unsafe")
+            finally:
+                os.close(descriptor)
+            signature = (*file_identity, hashlib.sha256(raw).hexdigest())
+            return raw.decode("utf-8"), signature
+        except ActivationError:
+            raise
+        except (OSError, UnicodeError) as error:
+            raise ActivationError("OpenClaw NATS credentials file is unsafe") from error
+
+    @classmethod
+    def _load_credentials(
+        cls, path: Path
+    ) -> tuple[str, tuple[str, ...], tuple[Any, ...]]:
+        text, signature = cls._read_private_credentials(path)
+        if path.suffix == ".creds":
+            jwt = re.search(
+                r"-----BEGIN NATS USER JWT-----\s*(\S+)\s*"
+                r"------END NATS USER JWT------",
+                text,
+            )
+            seed = re.search(
+                r"-----BEGIN USER NKEY SEED-----\s*(\S+)\s*"
+                r"------END USER NKEY SEED------",
+                text,
+            )
+            if (
+                jwt is None
+                or seed is None
+                or text.count("-----BEGIN NATS USER JWT-----") != 1
+                or text.count("------END NATS USER JWT------") != 1
+                or text.count("-----BEGIN USER NKEY SEED-----") != 1
+                or text.count("------END USER NKEY SEED------") != 1
+            ):
+                raise ActivationError("OpenClaw NATS credentials file is invalid")
+            return "user_credentials", (text,), signature
+        if path.suffix != ".json":
+            raise ActivationError("OpenClaw NATS credentials file is invalid")
+        try:
+            def reject_duplicate_keys(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("duplicate key")
+                    result[key] = value
+                return result
+
+            payload = json.loads(text, object_pairs_hook=reject_duplicate_keys)
+        except (TypeError, ValueError):
+            raise ActivationError("OpenClaw NATS credentials file is invalid") from None
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != NATS_USER_PASSWORD_FIELDS
+            or payload.get("schema") != NATS_USER_PASSWORD_SCHEMA
+            or type(payload.get("version")) is not int
+            or payload.get("version") != 1
+            or payload.get("mode") != "user_password"
+            or not isinstance(payload.get("user"), str)
+            or not payload["user"]
+            or payload["user"].strip() != payload["user"]
+            or not isinstance(payload.get("password"), str)
+            or not payload["password"]
+        ):
+            raise ActivationError("OpenClaw NATS credentials file is invalid")
+        return "user_password", (payload["user"], payload["password"]), signature
+
+    def _connection_auth_kwargs(self) -> dict[str, Any]:
+        if self._auth_mode == "user_credentials":
+            return {
+                "user_credentials": _SealedNatsRawCredentials(
+                    self._auth_values[0]
+                )
+            }
+        user, password = self._auth_values
+        return {"user": user, "password": password}
 
     def _connect(self) -> Any:
         if self.connect is not None:
@@ -712,7 +873,7 @@ class NatsJetStreamSession:
                     asyncio.wait_for(
                         self._connect()(
                             servers=list(self.servers),
-                            user_credentials=str(self.credentials_file),
+                            **self._connection_auth_kwargs(),
                             connect_timeout=self.connect_timeout_seconds,
                         ),
                         timeout=self.connect_timeout_seconds,
@@ -720,8 +881,8 @@ class NatsJetStreamSession:
                 )
             except asyncio.TimeoutError as error:
                 raise ActivationError("NATS connect timed out") from error
-            except Exception as error:
-                raise ActivationError("NATS connect failed") from error
+            except Exception:
+                raise ActivationError("NATS connect failed") from None
             self._jetstream = self._connection.jetstream()
             try:
                 self._key_value = loop.run_until_complete(

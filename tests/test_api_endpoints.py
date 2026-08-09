@@ -701,7 +701,14 @@ class ApiEndpointTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials.write_text(
+                "-----BEGIN NATS USER JWT-----\nunit.jwt\n"
+                "------END NATS USER JWT------\n\n"
+                "-----BEGIN USER NKEY SEED-----\nSUUNIT\n"
+                "------END USER NKEY SEED------\n",
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
             session = activation_module.NatsJetStreamSession(
                 servers=("nats://127.0.0.1:4222",),
                 credentials_file=credentials,

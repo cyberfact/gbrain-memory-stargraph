@@ -6,6 +6,7 @@ import json
 import tempfile
 import threading
 import unittest
+from collections import UserString
 from contextlib import contextmanager
 from unittest.mock import patch
 from pathlib import Path
@@ -49,6 +50,36 @@ DECLARATIONS = (
         "artifact_collection": "collections/toddy-oc-artifacts",
     },
 )
+
+
+VALID_NATS_CREDS = """-----BEGIN NATS USER JWT-----
+unit.jwt
+------END NATS USER JWT------
+
+-----BEGIN USER NKEY SEED-----
+SUUNIT
+------END USER NKEY SEED------
+"""
+
+
+def write_private_nats_creds(path: Path) -> Path:
+    path.write_text(VALID_NATS_CREDS, encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+def write_private_user_password(path: Path, **overrides) -> Path:
+    payload = {
+        "schema": "memory-stargraph.nats-credentials",
+        "version": 1,
+        "mode": "user_password",
+        "user": "oc-activation",
+        "password": "unit-secret-password",
+    }
+    payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.chmod(0o600)
+    return path
 
 
 class FakeControl:
@@ -232,8 +263,7 @@ class JetStreamAdapterTests(unittest.TestCase):
     def test_environment_builds_durable_operation_store_and_bounded_shared_session(self):
         store_class = getattr(activation_module, "JetStreamOperationStore")
         with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
             environment = {
                 "MEMORY_STARGRAPH_OC_PROVISION_ENABLED": "1",
                 "MEMORY_STARGRAPH_OC_NATS_SERVERS": "nats://127.0.0.1:4222",
@@ -369,6 +399,240 @@ class JetStreamAdapterTests(unittest.TestCase):
 
         self.assertEqual(journal.read("op-durable"), [event])
 
+    def test_nats_session_uses_exact_jwt_credentials_connect_kwargs(self):
+        calls = []
+
+        class JetStream:
+            async def key_value(self, _bucket):
+                return object()
+
+        class Connection:
+            def jetstream(self):
+                return JetStream()
+
+            async def drain(self):
+                return None
+
+        async def connect(**kwargs):
+            calls.append(kwargs)
+            return Connection()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
+            session = NatsJetStreamSession(
+                servers=("nats://127.0.0.1:4222",),
+                credentials_file=credentials,
+                bucket="oc-control",
+                connect=connect,
+                connect_timeout_seconds=0.1,
+                request_timeout_seconds=0.1,
+            )
+            with session.operation():
+                pass
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["servers"], ["nats://127.0.0.1:4222"])
+        self.assertEqual(calls[0]["connect_timeout"], 0.1)
+        captured_credentials = calls[0]["user_credentials"]
+        self.assertIsInstance(captured_credentials, UserString)
+        self.assertEqual(captured_credentials.data, VALID_NATS_CREDS)
+        self.assertNotIn("unit.jwt", str(captured_credentials))
+        self.assertNotIn("SUUNIT", repr(captured_credentials))
+        with self.assertRaises(AttributeError):
+            captured_credentials.data = "replacement"
+
+    def test_nats_jwt_credentials_never_reopen_a_replaced_path_on_reconnect(self):
+        replacement = VALID_NATS_CREDS.replace("unit.jwt", "replacement.jwt")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
+            session = NatsJetStreamSession(
+                servers=("nats://127.0.0.1:4222",),
+                credentials_file=credentials,
+                bucket="oc-control",
+                connect=lambda **_kwargs: None,
+            )
+            initial = session._connection_auth_kwargs()["user_credentials"]
+            replacement_path = Path(temp_dir) / "replacement.creds"
+            replacement_path.write_text(replacement, encoding="utf-8")
+            replacement_path.chmod(0o600)
+            replacement_path.replace(credentials)
+            reconnect = session._connection_auth_kwargs()["user_credentials"]
+
+        self.assertIsInstance(initial, UserString)
+        self.assertIsInstance(reconnect, UserString)
+        self.assertEqual(initial.data, VALID_NATS_CREDS)
+        self.assertEqual(reconnect.data, VALID_NATS_CREDS)
+        self.assertNotEqual(reconnect.data, replacement)
+
+    def test_nats_session_uses_exact_static_user_password_connect_kwargs(self):
+        calls = []
+
+        class JetStream:
+            async def key_value(self, _bucket):
+                return object()
+
+        class Connection:
+            def jetstream(self):
+                return JetStream()
+
+            async def drain(self):
+                return None
+
+        async def connect(**kwargs):
+            calls.append(kwargs)
+            return Connection()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            credentials = write_private_user_password(
+                Path(temp_dir) / "nats-user-password.json"
+            )
+            session = NatsJetStreamSession(
+                servers=("nats://127.0.0.1:4222",),
+                credentials_file=credentials,
+                bucket="oc-control",
+                connect=connect,
+                connect_timeout_seconds=0.1,
+                request_timeout_seconds=0.1,
+            )
+            with session.operation():
+                pass
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "servers": ["nats://127.0.0.1:4222"],
+                    "user": "oc-activation",
+                    "password": "unit-secret-password",
+                    "connect_timeout": 0.1,
+                }
+            ],
+        )
+
+    def test_nats_credentials_fail_closed_on_unsafe_or_ambiguous_files(self):
+        secret = "do-not-disclose-this-password"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cases = []
+
+            loose = write_private_user_password(root / "loose.json")
+            loose.chmod(0o640)
+            cases.append(loose)
+
+            target = write_private_user_password(root / "target.json")
+            symlink = root / "symlink.json"
+            symlink.symlink_to(target)
+            cases.append(symlink)
+
+            missing = write_private_user_password(root / "missing.json")
+            payload = json.loads(missing.read_text(encoding="utf-8"))
+            payload.pop("password")
+            missing.write_text(json.dumps(payload), encoding="utf-8")
+            cases.append(missing)
+
+            unknown_key = write_private_user_password(
+                root / "unknown-key.json", extra="not-allowed"
+            )
+            cases.append(unknown_key)
+
+            unknown_mode = write_private_user_password(
+                root / "unknown-mode.json", mode="jwt"
+            )
+            cases.append(unknown_mode)
+
+            wrong_version = write_private_user_password(
+                root / "wrong-version.json", version=2
+            )
+            cases.append(wrong_version)
+
+            mixed = write_private_user_password(
+                root / "mixed.json", user_credentials="nats.creds"
+            )
+            cases.append(mixed)
+
+            malformed = root / "malformed.json"
+            malformed.write_text("{not-json", encoding="utf-8")
+            malformed.chmod(0o600)
+            cases.append(malformed)
+
+            duplicate = root / "duplicate.json"
+            duplicate.write_text(
+                '{"schema":"memory-stargraph.nats-credentials",'
+                '"version":1,"mode":"user_password",'
+                '"user":"first","user":"second","password":"secret"}',
+                encoding="utf-8",
+            )
+            duplicate.chmod(0o600)
+            cases.append(duplicate)
+
+            empty_password = write_private_user_password(
+                root / "empty-password.json", password=""
+            )
+            cases.append(empty_password)
+
+            secret_bad_schema = write_private_user_password(
+                root / "bad-schema.json",
+                schema="wrong-schema",
+                password=secret,
+            )
+            cases.append(secret_bad_schema)
+
+            invalid_creds = root / "invalid.creds"
+            invalid_creds.write_text("not-a-nats-creds-file", encoding="utf-8")
+            invalid_creds.chmod(0o600)
+            cases.append(invalid_creds)
+
+            unknown_suffix = write_private_user_password(root / "credentials.txt")
+            cases.append(unknown_suffix)
+
+            for credentials in cases:
+                with self.subTest(credentials=credentials.name):
+                    with self.assertRaises(ActivationError) as captured:
+                        NatsJetStreamSession(
+                            servers=("nats://127.0.0.1:4222",),
+                            credentials_file=credentials,
+                            bucket="oc-control",
+                        )
+                    self.assertNotIn(secret, str(captured.exception))
+
+    def test_nats_credentials_reject_nonregular_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            credentials = Path(temp_dir) / "credentials.json"
+            credentials.mkdir()
+            credentials.chmod(0o600)
+            with self.assertRaises(ActivationError):
+                NatsJetStreamSession(
+                    servers=("nats://127.0.0.1:4222",),
+                    credentials_file=credentials,
+                    bucket="oc-control",
+                )
+
+    def test_nats_connect_failure_does_not_disclose_static_password(self):
+        secret = "connect-error-secret"
+
+        async def connect(**_kwargs):
+            raise RuntimeError(f"broker rejected {secret}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            credentials = write_private_user_password(
+                Path(temp_dir) / "credentials.json", password=secret
+            )
+            session = NatsJetStreamSession(
+                servers=("nats://127.0.0.1:4222",),
+                credentials_file=credentials,
+                bucket="oc-control",
+                connect=connect,
+                connect_timeout_seconds=0.1,
+                request_timeout_seconds=0.1,
+            )
+            with self.assertRaises(ActivationError) as captured:
+                with session.operation():
+                    pass
+
+        self.assertEqual(str(captured.exception), "NATS connect failed")
+        self.assertNotIn(secret, str(captured.exception))
+        self.assertIsNone(captured.exception.__cause__)
+
     def test_nats_session_pools_one_bounded_connection_for_an_operation(self):
         calls = []
         caller_thread = threading.get_ident()
@@ -401,8 +665,7 @@ class JetStreamAdapterTests(unittest.TestCase):
             return Connection()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
             session = NatsJetStreamSession(
                 servers=("nats://127.0.0.1:4222",),
                 credentials_file=credentials,
@@ -482,8 +745,7 @@ class JetStreamAdapterTests(unittest.TestCase):
             return Connection()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
             session = NatsJetStreamSession(
                 servers=("nats://127.0.0.1:4222",),
                 credentials_file=credentials,
@@ -527,8 +789,7 @@ class JetStreamAdapterTests(unittest.TestCase):
             await asyncio.sleep(0.05)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
             session = NatsJetStreamSession(
                 servers=("nats://127.0.0.1:4222",),
                 credentials_file=credentials,
@@ -565,8 +826,7 @@ class JetStreamAdapterTests(unittest.TestCase):
             return Connection()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
             session = NatsJetStreamSession(
                 servers=("nats://127.0.0.1:4222",),
                 credentials_file=credentials,
@@ -614,8 +874,7 @@ class JetStreamAdapterTests(unittest.TestCase):
             return Connection()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
             session = NatsJetStreamSession(
                 servers=("nats://127.0.0.1:4222",),
                 credentials_file=credentials,
@@ -654,8 +913,7 @@ class JetStreamAdapterTests(unittest.TestCase):
             return Connection()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text("unit", encoding="utf-8")
+            credentials = write_private_nats_creds(Path(temp_dir) / "nats.creds")
             session = NatsJetStreamSession(
                 servers=("nats://127.0.0.1:4222",),
                 credentials_file=credentials,

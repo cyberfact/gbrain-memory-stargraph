@@ -21,13 +21,47 @@ are supplied outside this repository:
 - `MEMORY_STARGRAPH_OC_NATS_REQUEST_TIMEOUT_SECONDS` (optional, default and maximum `2`)
 
 The NATS credentials file, bucket, and journal stream are pre-provisioned by
-the operator. The service never creates a KV bucket or stream. The same bearer
-token is required by GTasks as `MEMORY_STARGRAPH_OC_PROVISION_TOKEN`; GTasks
-also needs `MEMORY_STARGRAPH_URL` for the service URL.
+the operator. The service never creates a KV bucket or stream. The credential
+path must resolve to a private mode-`0600` regular file and must not be a
+symlink. Two authentication formats are supported:
+
+1. A standard NATS JWT/nkey file whose name ends in `.creds`. The file is
+   read once through a verified descriptor and captured as sealed in-memory
+   credentials. That captured value is passed to `nats.connect` as
+   `user_credentials`, so initial connection and reconnect never reopen or
+   retrust the pathname.
+2. A static NATS user/password JSON file whose name ends in `.json` and whose
+   complete schema is exactly:
+
+   ```json
+   {
+     "schema": "memory-stargraph.nats-credentials",
+     "version": 1,
+     "mode": "user_password",
+     "user": "<private NATS user>",
+     "password": "<private NATS password>"
+   }
+   ```
+
+   No additional or duplicate keys, alternative modes, empty fields, or mixed
+   JWT/user-password settings are accepted. The values are passed to
+   `nats.connect` as `user` and `password`; they are never returned or logged.
+
+Static `authorization.users` deployments remain static-user deployments; do
+not convert the broker to operator/JWT mode for this integration. Conversely,
+an existing JWT/nkey deployment can keep using its `.creds` file. In both
+modes, the dedicated activation principal must retain least-privilege broker
+ACLs: only the already-created activation KV bucket, required JetStream lookup
+operations, and configured journal subject are allowed. It must not receive
+general subjects or stream/KV administration authority.
+
+The same bearer token is required by GTasks as
+`MEMORY_STARGRAPH_OC_PROVISION_TOKEN`; GTasks also needs
+`MEMORY_STARGRAPH_URL` for the service URL.
 
 The dashboard-managed Memory Stargraph Python runtime must declare and install
 `nats-py==2.15.0` before enabling this endpoint. Its setup check is
-`<dashboard-runtime-python> -c 'import nats; print(nats.__version__)'`.
+`<dashboard-runtime-python> -c 'from importlib.metadata import version; print(version("nats-py"))'`.
 Absence of that dependency is a fail-closed activation error; do not fall back
 to a different process Python or install it ad hoc in the repository.
 
