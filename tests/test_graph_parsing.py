@@ -240,6 +240,69 @@ class GraphParsingTests(unittest.TestCase):
             "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
         )
 
+    def test_search_raw_graph_resolves_exact_todo_id_from_backlog_before_live_search(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "type": "root", "links": []}],
+            "edge_types": [],
+        }
+        backlog = "\n".join(
+            [
+                "| id | status | priority | title | node | updated | notes |",
+                "| --- | --- | --- | --- | --- | --- | --- |",
+                "| SG-0162 | completed | P1 | Reduce recurring Ask Yoda broad-graph timeout regression | [[notes/memory-starmap-todo-list/reduce-recurring-ask-yoda-broad-graph-timeout-regression]] | 2026-07-24 | Completed. |",
+            ]
+        )
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args == ("get", "notes/memory-starmap-todo-list"):
+                return backlog
+            raise AssertionError(f"exact TODO ID search should not call live search: {args}")
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "SG-0162")
+
+        coverage = graph["source"]["coverage"]
+        self.assertEqual(coverage["search_status"], "complete")
+        self.assertEqual(coverage["search_primary_status"], "complete")
+        self.assertEqual(coverage["search_evidence_status"], "skipped_exact_todo_id")
+        self.assertEqual(coverage["search_exact_todo_id_status"], "complete")
+        self.assertEqual(
+            coverage["search_slugs"],
+            ["notes/memory-starmap-todo-list/reduce-recurring-ask-yoda-broad-graph-timeout-regression"],
+        )
+
+    def test_search_raw_graph_missing_exact_todo_id_does_not_return_false_positives(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "type": "root", "links": []}],
+            "edge_types": [],
+        }
+        backlog = "\n".join(
+            [
+                "| id | status | priority | title | node | updated | notes |",
+                "| --- | --- | --- | --- | --- | --- | --- |",
+                "| SG-0162 | completed | P1 | Reduce recurring Ask Yoda broad-graph timeout regression | [[notes/memory-starmap-todo-list/reduce-recurring-ask-yoda-broad-graph-timeout-regression]] | 2026-07-24 | Completed. |",
+            ]
+        )
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args == ("get", "notes/memory-starmap-todo-list"):
+                return backlog
+            raise AssertionError(f"missing exact TODO ID search should not broaden: {args}")
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "SG-9999")
+
+        coverage = graph["source"]["coverage"]
+        self.assertEqual(coverage["search_status"], "complete")
+        self.assertEqual(coverage["search_primary_status"], "complete")
+        self.assertEqual(coverage["search_evidence_status"], "skipped_exact_todo_id")
+        self.assertEqual(coverage["search_results"], 0)
+        self.assertEqual(coverage["search_slugs"], [])
+
     def test_merge_search_results_keeps_exact_primary_above_partial_broad_evidence(self):
         results = merge_search_results(
             [
@@ -301,6 +364,29 @@ class GraphParsingTests(unittest.TestCase):
             "notes/memory-starmap-todo-list/persist-global-active-tag-readback-in-capture-link-terminal-results",
             [result["slug"] for result in results],
         )
+
+    def test_merge_search_results_prefers_exact_product_label_for_product_name_query(self):
+        results = merge_search_results(
+            [
+                {
+                    "slug": "runs/memory-stargraph-wish-sg0195-20260809t041140-0700-ed8b1a1",
+                    "score": 12.0,
+                    "label": "Memory Stargraph Developer SG-0195 loaded search discoverability",
+                    "preview": "",
+                }
+            ],
+            [
+                {
+                    "slug": "products/memory-stargraph",
+                    "score": 4.0,
+                    "label": "Memory Stargraph",
+                    "preview": "Product node",
+                }
+            ],
+            "memory stargraph",
+        )
+
+        self.assertEqual(results[0]["slug"], "products/memory-stargraph")
 
     def test_evidence_search_ignores_low_signal_page_list_matches(self):
         raw_graph = {

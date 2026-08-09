@@ -173,7 +173,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.187"
+UI_VERSION = "V1.0.188"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -1854,6 +1854,44 @@ def todo_row_node_slug(row):
     return match.group(1).strip() if match else ""
 
 
+def looks_like_todo_id(value):
+    return bool(re.fullmatch(r"SG-\d{3,}", str(value or "").strip(), re.IGNORECASE))
+
+
+def exact_todo_id_search_results(query):
+    todo_id = str(query or "").strip().upper()
+    if not looks_like_todo_id(todo_id):
+        return None, "not_exact_todo_id"
+    try:
+        backlog = run_gbrain("get", "notes/memory-starmap-todo-list", timeout=4)
+    except Exception:  # noqa: BLE001
+        return [], "partial_timeout"
+    for row in parse_memory_starmap_todo_rows(backlog):
+        if str(row.get("id") or "").strip().upper() != todo_id:
+            continue
+        slug = todo_row_node_slug(row)
+        if not slug:
+            return [], "complete"
+        title = str(row.get("title") or make_label(slug))
+        status = str(row.get("status") or "").strip()
+        preview = "Exact TODO ID match"
+        if status:
+            preview += f": status {status}"
+        return [
+            {
+                "slug": slug,
+                "score": 100.0,
+                "label": title[:120],
+                "preview": preview,
+            }
+        ], "complete"
+    return [], "complete"
+
+
+def normalized_search_identity(value):
+    return re.sub(r"[^\w]+", " ", str(value or "").lower()).strip()
+
+
 def yoda_details(backend, model="", timeout=45):
     return {
         "backend": backend,
@@ -2480,21 +2518,35 @@ def merge_search_results(primary_results, evidence_results, query=""):
     def identity_relevance(item):
         normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower()).replace("_", "-")
         if not normalized_query:
-            return (0, 0, 0, 0)
+            return (0, 0, 0, 0, 0, 0)
+        identity_query = normalized_search_identity(query)
         terms = evidence_search_terms(query)
         slug = str(item.get("slug") or "").lower().replace("_", "-")
         label = str(item.get("label") or "").lower().replace("_", "-")
         identity_text = f"{slug} {label}"
+        identity_words = normalized_search_identity(identity_text)
+        label_words = normalized_search_identity(item.get("label") or "")
+        slug_words = normalized_search_identity(item.get("slug") or "")
         preview = str(item.get("preview") or "").lower().replace("_", "-")
         full_text = f"{identity_text} {preview}"
+        exact_identity = 1 if identity_query and identity_query in {label_words, slug_words} else 0
+        label_prefix = 1 if identity_query and label_words.startswith(identity_query) else 0
         identity_phrase = 1 if normalized_query in identity_text else 0
         full_phrase = 1 if normalized_query in full_text else 0
         if not terms:
-            return (identity_phrase, full_phrase, 0, 0)
+            return (exact_identity, label_prefix, identity_phrase, full_phrase, 0, 0)
         identity_matches = sum(1 for term in terms if term in identity_text)
         full_matches = sum(1 for term in terms if term in full_text)
         identity_complete = 1 if identity_matches == len(terms) else 0
-        return (identity_phrase, identity_complete, identity_matches, full_phrase + full_matches)
+        word_complete = 1 if identity_query and identity_query in identity_words else 0
+        return (
+            exact_identity,
+            label_prefix,
+            max(identity_phrase, word_complete),
+            identity_complete,
+            identity_matches,
+            full_phrase + full_matches,
+        )
 
     return sorted(
         merged.values(),
@@ -3964,24 +4016,32 @@ def expand_raw_graph(raw_graph, center_slug):
 def search_raw_graph(raw_graph, query):
     started = time.monotonic()
     deadline = started + SEARCH_TOTAL_BUDGET_SECONDS
+    exact_todo_results, exact_todo_status = exact_todo_id_search_results(query)
     primary_status = "complete"
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        primary_results = []
-        primary_status = "timeout"
+    if exact_todo_results is not None:
+        primary_results = exact_todo_results
+        primary_status = "complete" if exact_todo_status == "complete" else "timeout"
     else:
-        try:
-            primary_budget = min(
-                SEARCH_PRIMARY_TIMEOUT_SECONDS,
-                max(0.5, remaining - SEARCH_EVIDENCE_BUDGET_SECONDS),
-            )
-            search_output = run_gbrain("search", query, timeout=primary_budget)
-            primary_results = parse_search_results(search_output)
-        except Exception:  # noqa: BLE001
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             primary_results = []
             primary_status = "timeout"
+        else:
+            try:
+                primary_budget = min(
+                    SEARCH_PRIMARY_TIMEOUT_SECONDS,
+                    max(0.5, remaining - SEARCH_EVIDENCE_BUDGET_SECONDS),
+                )
+                search_output = run_gbrain("search", query, timeout=primary_budget)
+                primary_results = parse_search_results(search_output)
+            except Exception:  # noqa: BLE001
+                primary_results = []
+                primary_status = "timeout"
     remaining = deadline - time.monotonic()
-    if remaining <= 0:
+    if exact_todo_results is not None:
+        evidence_results = []
+        evidence_status = "skipped_exact_todo_id"
+    elif remaining <= 0:
         evidence_results = []
         evidence_status = "partial_timeout"
     else:
@@ -3992,7 +4052,7 @@ def search_raw_graph(raw_graph, query):
             deadline=evidence_deadline,
             per_type_timeout=evidence_budget,
         )
-    loaded_results = loaded_graph_search_results(
+    loaded_results = [] if exact_todo_results is not None else loaded_graph_search_results(
         raw_graph,
         query,
         existing_slugs=[result["slug"] for result in evidence_results + primary_results],
@@ -4023,10 +4083,12 @@ def search_raw_graph(raw_graph, query):
     coverage["evidence_search_slugs"] = [result["slug"] for result in evidence_results]
     coverage["loaded_graph_search_slugs"] = [result["slug"] for result in loaded_results]
     coverage["search_elapsed_ms"] = int((time.monotonic() - started) * 1000)
-    evidence_complete = evidence_status in {"complete", "skipped_no_terms"}
+    evidence_complete = evidence_status in {"complete", "skipped_no_terms", "skipped_exact_todo_id"}
     coverage["search_status"] = "complete" if primary_status == "complete" and evidence_complete else "partial_timeout"
     coverage["search_primary_status"] = primary_status
     coverage["search_evidence_status"] = evidence_status
+    if exact_todo_results is not None:
+        coverage["search_exact_todo_id_status"] = exact_todo_status
     source.update(
         {
             "mode": "gbrain",
