@@ -2525,11 +2525,15 @@ def merge_search_results(primary_results, evidence_results, query=""):
         label = str(item.get("label") or "").lower().replace("_", "-")
         identity_text = f"{slug} {label}"
         identity_words = normalized_search_identity(identity_text)
-        label_words = normalized_search_identity(item.get("label") or "")
+        raw_label = str(item.get("label") or "")
+        label_words = normalized_search_identity(raw_label)
         slug_words = normalized_search_identity(item.get("slug") or "")
         preview = str(item.get("preview") or "").lower().replace("_", "-")
         full_text = f"{identity_text} {preview}"
-        exact_identity = 1 if identity_query and identity_query in {label_words, slug_words} else 0
+        label_is_truncated = raw_label.endswith("...")
+        exact_identity = 1 if identity_query and (
+            slug_words == identity_query or (label_words == identity_query and not label_is_truncated)
+        ) else 0
         label_prefix = 1 if identity_query and label_words.startswith(identity_query) else 0
         identity_phrase = 1 if normalized_query in identity_text else 0
         full_phrase = 1 if normalized_query in full_text else 0
@@ -4089,6 +4093,8 @@ def search_raw_graph(raw_graph, query):
     coverage["search_evidence_status"] = evidence_status
     if exact_todo_results is not None:
         coverage["search_exact_todo_id_status"] = exact_todo_status
+    else:
+        coverage.pop("search_exact_todo_id_status", None)
     source.update(
         {
             "mode": "gbrain",

@@ -377,6 +377,12 @@ class GraphParsingTests(unittest.TestCase):
             ],
             [
                 {
+                    "slug": "runs/memory-stargraph-sre-daily-reliability-2026-08-09-sg0179-7b329889",
+                    "score": 18.1,
+                    "label": "Memory Stargraph...",
+                    "preview": "Truncated loaded-graph label",
+                },
+                {
                     "slug": "products/memory-stargraph",
                     "score": 4.0,
                     "label": "Memory Stargraph",
