@@ -1004,6 +1004,23 @@ class ApiEndpointTests(unittest.TestCase):
                 "server.resolver_feedback_health",
                 return_value={"pending": 0, "events_24h": 2},
             ),
+            mock.patch(
+                "server.latest_sre_numeric_evidence",
+                return_value={
+                    "status": "pass",
+                    "passed": True,
+                    "freshness": "current",
+                    "evidence": [{"slug": "reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d", "available": True, "status": "available"}],
+                    "counts": {
+                        "numeric_schema_present": 1,
+                        "capacity_categories_present": 1,
+                        "backup_evidence_present": 1,
+                        "restore_evidence_present": 1,
+                        "baseline_windows_present": 1,
+                    },
+                    "summary": "Numeric SRE capacity, backup freshness, restore rehearsal, and 7-day/30-day baseline evidence is present.",
+                },
+            ),
             mock.patch("server.datetime", FixedDateTime),
         ):
             status, data = self.dispatch_get("/api/memory-value-digest?window=week")
@@ -1015,13 +1032,14 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(outcomes["window"], "week")
         self.assertIn("weekly_deltas", outcomes)
         self.assertEqual(outcomes["weekly_deltas"]["completed"], 3)
-        self.assertEqual(outcomes["summary_counts"]["gates_total"], 7)
-        self.assertEqual(outcomes["summary_counts"]["gates_passed"], 7)
+        self.assertEqual(outcomes["summary_counts"]["gates_total"], 8)
+        self.assertEqual(outcomes["summary_counts"]["gates_passed"], 8)
         gates = {gate["key"]: gate for gate in outcomes["gates"]}
         self.assertEqual(gates["retrieval_quality_benchmark"]["status"], "pass")
         self.assertEqual(gates["natural_language_search_parity"]["status"], "pass")
         self.assertEqual(gates["contradiction_pruning"]["status"], "pass")
         self.assertEqual(gates["unresolved_blockers"]["status"], "pass")
+        self.assertEqual(gates["sre_capacity_backup_restore"]["status"], "pass")
         self.assertEqual(gates["unresolved_blockers"]["counts"]["current_unresolved"], 0)
         self.assertEqual(gates["unresolved_blockers"]["counts"]["historical_failed"], 1)
         self.assertEqual(gates["unresolved_blockers"]["counts"]["superseded_failed"], 1)
@@ -1051,6 +1069,17 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.STORE", fake_store),
             mock.patch("server.run_gbrain", side_effect=fake_gbrain),
             mock.patch("server.resolver_feedback_health", return_value={"pending": 0}),
+            mock.patch(
+                "server.latest_sre_numeric_evidence",
+                return_value={
+                    "status": "missing",
+                    "passed": False,
+                    "freshness": "missing",
+                    "evidence": [],
+                    "counts": {},
+                    "summary": "Numeric SRE evidence missing.",
+                },
+            ),
         ):
             status, data = self.dispatch_get("/api/memory-value-digest?window=week")
 
@@ -1061,6 +1090,7 @@ class ApiEndpointTests(unittest.TestCase):
         gates = {gate["key"]: gate for gate in outcomes["gates"]}
         self.assertEqual(gates["retrieval_quality_benchmark"]["status"], "missing")
         self.assertEqual(gates["worker_learnings"]["status"], "missing")
+        self.assertEqual(gates["sre_capacity_backup_restore"]["status"], "missing")
         self.assertEqual(gates["unresolved_blockers"]["status"], "degraded")
         self.assertFalse(gates["retrieval_quality_benchmark"]["passed"])
         self.assertEqual(gates["retrieval_quality_benchmark"]["evidence_slugs"], [])
@@ -1127,6 +1157,17 @@ class ApiEndpointTests(unittest.TestCase):
                 mock.patch("server.STORE", fake_store),
                 mock.patch("server.run_gbrain", side_effect=fake_gbrain),
                 mock.patch("server.resolver_feedback_health", return_value={"pending": 0}),
+                mock.patch(
+                    "server.latest_sre_numeric_evidence",
+                    return_value={
+                        "status": "pass",
+                        "passed": True,
+                        "freshness": "current",
+                        "evidence": [{"slug": "reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d", "available": True, "status": "available"}],
+                        "counts": {},
+                        "summary": "Numeric SRE evidence present.",
+                    },
+                ),
             ):
                 status, data = self.dispatch_get("/api/memory-value-digest?window=week")
 
@@ -1154,6 +1195,7 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.attachment_storage_status", return_value={"available": True}),
             mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
             mock.patch("server.memory_value_digest", return_value=weekly),
+            mock.patch("server.latest_sre_numeric_evidence", return_value={"status": "pass", "freshness": "current", "evidence_slugs": ["reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d"]}),
             mock.patch("server.resolver_feedback_health", return_value={"pending": 0, "proposal_counts": {"pending": 0}}),
             mock.patch(
                 "server.configured_target_readiness",
@@ -1167,8 +1209,8 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(data["read_only"])
         self.assertEqual(data["schema_version"], 1)
         self.assertEqual(data["status"], "ready")
-        self.assertEqual(data["summary_counts"]["checks_total"], 7)
-        self.assertEqual(data["summary_counts"]["ready"], 7)
+        self.assertEqual(data["summary_counts"]["checks_total"], 8)
+        self.assertEqual(data["summary_counts"]["ready"], 8)
         self.assertIsInstance(data["safe_next_step"], dict)
         self.assertTrue(data["safe_next_step"]["safe"])
         self.assertFalse(data["safe_next_step"]["mutation"])
@@ -1185,6 +1227,7 @@ class ApiEndpointTests(unittest.TestCase):
             "durable_storage",
             "weekly_verified_outcomes",
             "resolver_pending",
+            "sre_numeric_evidence",
             "configured_targets",
         })
         serialized = json.dumps(data).lower()
@@ -1211,6 +1254,7 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.attachment_storage_status", return_value={"available": False}),
             mock.patch("server.public_yoda_model_config", side_effect=RuntimeError("redacted failure")),
             mock.patch("server.memory_value_digest", return_value=weekly),
+            mock.patch("server.latest_sre_numeric_evidence", return_value={"status": "partial", "freshness": "partial", "evidence_slugs": []}),
             mock.patch("server.resolver_feedback_health", return_value={"proposal_counts": {"pending": 2}}),
             mock.patch(
                 "server.configured_target_readiness",
@@ -1223,12 +1267,13 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["status"], "blocked")
         self.assertEqual(data["summary_counts"]["blocked"], 1)
         self.assertEqual(data["summary_counts"]["missing"], 1)
-        self.assertEqual(data["summary_counts"]["partial"], 1)
+        self.assertEqual(data["summary_counts"]["partial"], 2)
         self.assertEqual(data["summary_counts"]["no_activity"], 1)
         checks = {check["id"]: check for check in data["checks"]}
         self.assertEqual(checks["durable_storage"]["status"], "blocked")
         self.assertEqual(checks["model_configuration"]["status"], "missing")
         self.assertEqual(checks["weekly_verified_outcomes"]["status"], "partial")
+        self.assertEqual(checks["sre_numeric_evidence"]["status"], "partial")
         self.assertEqual(checks["configured_targets"]["status"], "no_activity")
         self.assertEqual(data["safe_next_step"]["check_id"], "model_configuration")
         serialized = json.dumps(data).lower()

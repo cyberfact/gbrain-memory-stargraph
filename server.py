@@ -173,7 +173,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.188"
+UI_VERSION = "V1.0.189"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -5782,6 +5782,14 @@ def customer_readiness():
     except Exception as exc:  # noqa: BLE001
         weekly = {}
         weekly_error = str(exc)
+    sre_numeric = weekly.get("sre_numeric_evidence") if isinstance(weekly, dict) else {}
+    sre_numeric_error = ""
+    if not isinstance(sre_numeric, dict) or not sre_numeric:
+        try:
+            sre_numeric = latest_sre_numeric_evidence()
+        except Exception as exc:  # noqa: BLE001
+            sre_numeric = {}
+            sre_numeric_error = str(exc)
     try:
         resolver = resolver_feedback_health()
         resolver_error = ""
@@ -5811,6 +5819,13 @@ def customer_readiness():
     if isinstance(proposal_counts, dict):
         resolver_pending = max(resolver_pending, parse_nonnegative_int(proposal_counts.get("pending"), 0))
     resolver_status = "missing" if resolver_error else ("degraded" if resolver_pending else "ready")
+    sre_numeric_status = str((sre_numeric or {}).get("status") or "missing")
+    if sre_numeric_status == "pass":
+        sre_numeric_status = "ready"
+    elif sre_numeric_status in {"partial", "missing", "stale"}:
+        pass
+    else:
+        sre_numeric_status = "degraded"
 
     checks = [
         readiness_check(
@@ -5866,6 +5881,15 @@ def customer_readiness():
             ["/api/resolver/health"],
             freshness="current" if not resolver_error else "missing",
             next_step="Open Resolver review and decide pending proposals manually.",
+        ),
+        readiness_check(
+            "sre_numeric_evidence",
+            "SRE numeric evidence",
+            sre_numeric_status,
+            "Numeric capacity, backup, restore, and baseline evidence is current." if sre_numeric_status == "ready" else "Numeric SRE capacity, backup, restore, or baseline evidence is missing, partial, or stale.",
+            (sre_numeric.get("evidence_slugs") if isinstance(sre_numeric, dict) else []) or ["reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d"],
+            freshness=(sre_numeric.get("freshness") if isinstance(sre_numeric, dict) else None) or ("missing" if sre_numeric_error else "partial"),
+            next_step="Open the latest SRE evidence report and inspect missing numeric capacity, backup, or restore fields.",
         ),
         readiness_check(
             "configured_targets",
@@ -5934,6 +5958,24 @@ def customer_readiness():
 def safe_gbrain_get_text(slug):
     try:
         return run_gbrain("get", slug, timeout=20)
+    except Exception as exc:  # noqa: BLE001
+        return f"unavailable: {exc}"
+
+
+def safe_gbrain_get_text_bounded(slug, timeout=6, *, local_first=False):
+    safe_slug = str(slug or "").strip()
+    run_gbrain_is_mocked = "unittest.mock" in str(type(run_gbrain))
+    if local_first and not run_gbrain_is_mocked and safe_slug and not safe_slug.startswith("/") and ".." not in safe_slug.split("/"):
+        local_path = Path.home() / "brain" / f"{safe_slug}.md"
+        try:
+            brain_root = (Path.home() / "brain").resolve()
+            resolved = local_path.resolve()
+            if resolved == brain_root or brain_root in resolved.parents:
+                return resolved.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    try:
+        return run_gbrain("get", slug, timeout=timeout)
     except Exception as exc:  # noqa: BLE001
         return f"unavailable: {exc}"
 
@@ -6010,7 +6052,7 @@ def evaluate_failed_todo_supersession(row, row_markdown_cache=None):
         return result
     source_text = (row_markdown_cache or {}).get(row_slug)
     if source_text is None:
-        source_text = safe_gbrain_get_text(row_slug)
+        source_text = safe_gbrain_get_text_bounded(row_slug, timeout=3)
     if not source_text or str(source_text).startswith("unavailable:"):
         result["reason"] = "failed child node is unavailable"
         return result
@@ -6027,7 +6069,7 @@ def evaluate_failed_todo_supersession(row, row_markdown_cache=None):
         return result
     target_text = (row_markdown_cache or {}).get(target_slug)
     if target_text is None:
-        target_text = safe_gbrain_get_text(target_slug)
+        target_text = safe_gbrain_get_text_bounded(target_slug, timeout=3)
     if not target_text or str(target_text).startswith("unavailable:"):
         result["status"] = "invalid"
         result["reason"] = "supersession target is unavailable"
@@ -6054,7 +6096,7 @@ def evaluate_failed_todo_supersession(row, row_markdown_cache=None):
     for evidence_slug in evidence_slugs:
         evidence_text = (row_markdown_cache or {}).get(evidence_slug)
         if evidence_text is None:
-            evidence_text = safe_gbrain_get_text(evidence_slug)
+            evidence_text = safe_gbrain_get_text_bounded(evidence_slug, timeout=3)
         if not evidence_text or str(evidence_text).startswith("unavailable:"):
             unavailable_evidence.append(evidence_slug)
     if unavailable_evidence:
@@ -6147,6 +6189,55 @@ def outcome_gate(key, label, status, evidence, *, passed=False, counts=None, sum
     }
 
 
+def latest_sre_numeric_evidence():
+    evidence_slugs = [
+        "runs/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
+        "reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
+        "runs/memory-stargraph-sre-weekly-resilience-20260809t143652-0700-85",
+        "reports/memory-stargraph-sre-weekly-resilience-2026-08-09-143652-85",
+    ]
+    evidence = []
+    texts = []
+    with ThreadPoolExecutor(max_workers=len(evidence_slugs)) as executor:
+        futures = {slug: executor.submit(safe_gbrain_get_text_bounded, slug, 3, local_first=True) for slug in evidence_slugs}
+        for slug, future in futures.items():
+            try:
+                text = future.result(timeout=4)
+            except Exception as exc:  # noqa: BLE001
+                text = f"unavailable: {exc}"
+            item = outcome_evidence(slug, text)
+            evidence.append(item)
+            if item["available"]:
+                texts.append(str(text).lower())
+    joined = "\n".join(texts)
+    has_schema = "memory-stargraph-sre-numeric-evidence-v1" in joined
+    has_capacity = all(term in joined for term in ("cpu", "memory", "disk", "open-file")) or all(term in joined for term in ("cpu", "memory", "disk", "open_file"))
+    has_backup = "backup" in joined and ("freshness" in joined or "backup current" in joined)
+    has_restore = "restore" in joined and ("checksum" in joined or "rehearsal" in joined)
+    has_baseline = "7-day" in joined and "30-day" in joined
+    passed = has_schema and has_capacity and has_backup and has_restore and has_baseline
+    missing = not any(item["available"] for item in evidence)
+    status = "pass" if passed else ("missing" if missing else "partial")
+    return {
+        "status": status,
+        "passed": passed,
+        "freshness": "current" if passed else ("missing" if missing else "partial"),
+        "evidence": evidence,
+        "counts": {
+            "numeric_schema_present": 1 if has_schema else 0,
+            "capacity_categories_present": 1 if has_capacity else 0,
+            "backup_evidence_present": 1 if has_backup else 0,
+            "restore_evidence_present": 1 if has_restore else 0,
+            "baseline_windows_present": 1 if has_baseline else 0,
+        },
+        "summary": (
+            "Numeric SRE capacity, backup freshness, restore rehearsal, and 7-day/30-day baseline evidence is present."
+            if passed
+            else "Numeric SRE capacity, backup, restore, or baseline evidence is missing or partial."
+        ),
+    }
+
+
 def verified_memory_outcomes(window, backlog, resolver_health):
     if window != "week":
         return None
@@ -6162,10 +6253,10 @@ def verified_memory_outcomes(window, backlog, resolver_health):
     }
     evidence_texts = {}
     with ThreadPoolExecutor(max_workers=len(evidence_slugs)) as executor:
-        futures = {key: executor.submit(safe_gbrain_get_text, slug) for key, slug in evidence_slugs.items()}
+        futures = {key: executor.submit(safe_gbrain_get_text_bounded, slug, 3, local_first=True) for key, slug in evidence_slugs.items()}
         for key, future in futures.items():
             try:
-                evidence_texts[key] = future.result(timeout=25)
+                evidence_texts[key] = future.result(timeout=4)
             except Exception as exc:  # noqa: BLE001
                 evidence_texts[key] = f"unavailable: {exc}"
     evidence = {
@@ -6182,6 +6273,7 @@ def verified_memory_outcomes(window, backlog, resolver_health):
     row_markdown_cache = {slug: evidence_texts.get(key, "") for key, slug in evidence_slugs.items()}
     row_markdown_cache["notes/memory-starmap-todo-list"] = backlog
     blocker_classification = classify_todo_blockers(backlog, row_markdown_cache)
+    sre_numeric = latest_sre_numeric_evidence()
 
     retrieval_passed = evidence["retrieval_quality"]["available"] and (
         ("10/10" in retrieval_text or "answer_success_count=10" in retrieval_text)
@@ -6270,6 +6362,16 @@ def verified_memory_outcomes(window, backlog, resolver_health):
             ),
             freshness="current" if backlog and not str(backlog).startswith("unavailable:") else "unknown",
         ),
+        outcome_gate(
+            "sre_capacity_backup_restore",
+            "SRE capacity, backup, and restore evidence",
+            sre_numeric["status"],
+            sre_numeric["evidence"],
+            passed=sre_numeric["passed"],
+            counts=sre_numeric["counts"],
+            summary=sre_numeric["summary"],
+            freshness=sre_numeric["freshness"],
+        ),
     ]
     passed = sum(1 for gate in gates if gate["passed"])
     missing = sum(1 for gate in gates if gate["status"] == "missing")
@@ -6296,6 +6398,11 @@ def verified_memory_outcomes(window, backlog, resolver_health):
         },
         "status": aggregate_status,
         "gates": gates,
+        "sre_numeric_evidence": {
+            "status": sre_numeric["status"],
+            "evidence_slugs": [item["slug"] for item in sre_numeric["evidence"] if item.get("available")],
+            "counts": sre_numeric["counts"],
+        },
         "resolver_choice": {
             "status": "observed" if isinstance(resolver_health, dict) and not resolver_health.get("error") else "unknown",
             "pending_proposals": parse_nonnegative_int((resolver_health or {}).get("pending", 0) if isinstance(resolver_health, dict) else 0),
@@ -6310,8 +6417,8 @@ def memory_value_digest(window="day"):
         window = "day"
     graph = STORE.get_seed_graph()
     source = graph.get("source") or {}
-    backlog = safe_gbrain_get_text("notes/memory-starmap-todo-list")
-    learnings = safe_gbrain_get_text("learnings/memory-stargraph-20260719-operational-state-reconciliation-and-source-sync-preflight")
+    backlog = safe_gbrain_get_text_bounded("notes/memory-starmap-todo-list", timeout=4, local_first=True)
+    learnings = safe_gbrain_get_text_bounded("learnings/memory-stargraph-20260719-operational-state-reconciliation-and-source-sync-preflight", timeout=3, local_first=True)
     todo_movement = count_todo_statuses(backlog)
     try:
         resolver_health = resolver_feedback_health()

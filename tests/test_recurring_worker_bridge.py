@@ -43,6 +43,25 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(bridge.BridgeError, "replay"):
                 bridge.submit_request(root, changed)
 
+    def test_submit_cli_preserves_weekly_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = bridge.main([
+                "--runtime-dir", str(root),
+                "submit",
+                "--role", "sre_daily_reliability",
+                "--operation", "evidence",
+                "--invocation-id", "sg0196-weekly-cli-0001",
+                "--expected-commit", "abc123",
+                "--mode", "weekly_resilience",
+                "--nonce", "sg0196-weekly-cli-evidence",
+                "--synthetic",
+                "--json",
+            ])
+            self.assertEqual(result, 0)
+            request = json.loads(next((root / "incoming").glob("*.json")).read_text(encoding="utf-8"))
+            self.assertEqual(request["mode"], "weekly_resilience")
+
     def test_learning_evidence_bundle_has_required_slots_and_phase_heartbeat(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -66,7 +85,26 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             values = bridge.validate_request(self.make_request(role="sre_daily_reliability"))
-            with mock.patch.object(bridge, "local_health", return_value={"ok": True, "ui_version": "V1.0.174"}):
+            numeric = {
+                "schema": "memory-stargraph-sre-numeric-evidence-v1",
+                "health_latency": {"local_health_ms": bridge.numeric_sample(12, "ms")},
+                "resources": {
+                    "cpu": {"load_average_1m": bridge.numeric_sample(0.1, "load")},
+                    "memory": {"available_mb": bridge.numeric_sample(2048, "MiB")},
+                    "disk": {"free_bytes": bridge.numeric_sample(1000, "bytes")},
+                    "cache": {"graph_cache_bytes": bridge.numeric_sample(100, "bytes")},
+                    "open_files": {"current_process_open_fd_count": bridge.numeric_sample(10, "count")},
+                },
+                "queue_backlog": {"todo_counts": {"planned": bridge.numeric_sample(0, "count")}},
+                "latency_baselines": {"search_7_day": {}, "search_30_day": {}, "health_7_day": {}, "health_30_day": {}},
+                "backup": {"status": "ok"},
+                "restore_rehearsal": {"status": "ok"},
+                "evidence_gaps": [],
+            }
+            with (
+                mock.patch.object(bridge, "local_health", return_value={"ok": True, "ui_version": "V1.0.174", "latency_ms": 12}),
+                mock.patch.object(bridge, "collect_sre_numeric_evidence", return_value=numeric),
+            ):
                 evidence = bridge.gather_sre_evidence(root, values)
             self.assertEqual(evidence["evidence_schema"], "memory-stargraph-sre-evidence-v1")
             self.assertFalse(evidence["incident_classification"]["incident"])
@@ -75,6 +113,54 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             baseline = evidence["metrics"]["retrieval_quality_baseline"]
             self.assertEqual(baseline["summary"]["question_count"], 10)
             self.assertTrue(all(baseline["gate"].values()))
+            self.assertEqual(evidence["numeric_sre_evidence"]["schema"], "memory-stargraph-sre-numeric-evidence-v1")
+            self.assertEqual(evidence["metrics"]["backup"]["status"], "ok")
+            self.assertIn("latency_baselines", evidence["metrics"])
+
+    def test_sre_numeric_evidence_has_units_thresholds_and_read_only_gaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            values = bridge.validate_request(self.make_request(role="sre_daily_reliability", mode="weekly_resilience"))
+            backup_text = "- Run timestamp UTC: 2026-08-09T10:00:01Z\n- Resolver events exported: 7\n- Link rows exported: 9\n"
+            with (
+                mock.patch.object(bridge, "gbrain_get", side_effect=[(True, "| SG-0196 | planned | P1 | Title | [[notes/x]] | 2026-08-09 | Note |\n"), (True, backup_text)]),
+                mock.patch.object(bridge, "parse_latency_baselines", return_value={"search_7_day": {"max_ms": bridge.numeric_sample(10000, "ms")}, "search_30_day": {"max_ms": bridge.numeric_sample(11000, "ms")}}),
+                mock.patch.object(bridge, "parse_restore_rehearsal", return_value={"status": "ok", "recency_seconds": bridge.numeric_sample(3600, "seconds"), "checksum_matched": True}),
+                mock.patch.object(bridge, "collect_resource_storage_samples", return_value={
+                    "cpu": {"normalized_load_1m": bridge.numeric_sample(0.1, "ratio", threshold={"warn_above": 0.75})},
+                    "memory": {"available_mb": bridge.numeric_sample(4096, "MiB", threshold={"warn_below_mb": 1024})},
+                    "disk": {"free_bytes": bridge.numeric_sample(1_000_000, "bytes")},
+                    "cache": {"graph_cache_age_seconds": bridge.numeric_sample(60, "seconds")},
+                    "open_files": {"current_process_open_fd_count": bridge.numeric_sample(12, "count")},
+                    "bridge_spool": {"incoming_count": bridge.numeric_sample(0, "count")},
+                }),
+            ):
+                evidence = bridge.collect_sre_numeric_evidence(root, values, {"latency_ms": 25})
+            self.assertEqual(evidence["schema"], "memory-stargraph-sre-numeric-evidence-v1")
+            self.assertTrue(evidence["read_only"])
+            self.assertEqual(evidence["mode"], "weekly_resilience")
+            self.assertEqual(evidence["health_latency"]["local_health_ms"]["unit"], "ms")
+            self.assertIn("threshold", evidence["resources"]["memory"]["available_mb"])
+            self.assertEqual(evidence["backup"]["status"], "ok")
+            self.assertEqual(evidence["restore_rehearsal"]["status"], "ok")
+            self.assertFalse(evidence["prohibited_actions"]["backup_mutation"])
+            self.assertEqual(evidence["queue_backlog"]["todo_counts"]["planned"]["value"], 1)
+
+    def test_sre_numeric_evidence_records_schema_valid_gaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            values = bridge.validate_request(self.make_request(role="sre_daily_reliability"))
+            with (
+                mock.patch.object(bridge, "gbrain_get", side_effect=[(False, "todo unavailable"), (False, "backup unavailable")]),
+                mock.patch.object(bridge, "collect_resource_storage_samples", return_value={"cpu": {}, "memory": {}, "disk": {}, "cache": {}, "open_files": {}, "bridge_spool": {}}),
+                mock.patch.object(bridge, "parse_latency_baselines", return_value={}),
+                mock.patch.object(bridge, "parse_restore_rehearsal", return_value={"status": "missing"}),
+            ):
+                evidence = bridge.collect_sre_numeric_evidence(root, values, {"latency_ms": None})
+            self.assertEqual(evidence["backup"]["status"], "missing")
+            self.assertIn("todo_backlog", evidence["evidence_gaps"])
+            self.assertIn("backup_latest", evidence["evidence_gaps"])
 
     def test_decision_bundle_validates_slug_prefixes_and_todo_duplicate_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -101,6 +187,36 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
                 result = bridge.persist_decision(root, values)
             self.assertEqual(result["artifact_count"], 1)
             put.assert_called_once()
+
+    def test_sre_decision_bundle_accepts_numeric_summary_and_keeps_old_schema_optional(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            bundle_path = root / "bundles" / "decision.json"
+            bundle = {
+                "role": "sre_daily_reliability",
+                "operation": "persist",
+                "invocation_id": "learning-bridge-test-0001",
+                "decision_type": "report_only",
+                "numeric_sre_evidence_summary": {"schema": "memory-stargraph-sre-numeric-evidence-v1", "status": "ok"},
+                "artifacts": [{
+                    "kind": "run",
+                    "slug": "runs/memory-stargraph-sre-bridge-test",
+                    "markdown": "---\nstatus: completed\n---\n# SRE Bridge Test\n",
+                }],
+            }
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            values = bridge.validate_request(self.make_request(role="sre_daily_reliability", operation="persist", bundle_file=str(bundle_path)))
+            with mock.patch.object(bridge, "gbrain_put"):
+                result = bridge.persist_decision(root, values)
+            self.assertEqual(result["numeric_sre_evidence_summary"]["schema"], "memory-stargraph-sre-numeric-evidence-v1")
+
+            old_bundle = dict(bundle)
+            old_bundle.pop("numeric_sre_evidence_summary")
+            bundle_path.write_text(json.dumps(old_bundle), encoding="utf-8")
+            with mock.patch.object(bridge, "gbrain_put"):
+                old_result = bridge.persist_decision(root, values)
+            self.assertNotIn("numeric_sre_evidence_summary", old_result)
 
     def test_gbrain_put_falls_back_to_stargraph_save_and_raw_readback(self):
         calls = []

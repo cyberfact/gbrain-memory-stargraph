@@ -170,7 +170,7 @@ has been rewritten. Use the Stargraph tag endpoint, for example
 readback has no standalone `active` tag, no active title/body marker, and
 semantic fields such as `ux_lease` and `active_change` are false.
 
-Recurring Learning and Daily SRE execution runs through the host-managed
+Recurring Learning and Daily/Weekly SRE evidence execution runs through the host-managed
 recurring worker bridge because restricted Codex worker tasks may have no
 TCP/network access even when the host service is healthy. Canonical task workers
 use `python3 scripts/automation/recurring_worker_bridge.py submit`, `status`,
@@ -213,7 +213,17 @@ Daily Learning evidence includes service health, bounded raw Goal/product/TODO
 and runbook context, a 10-question evaluator evidence slot with
 model/fallback/context status, production feedback and no-action review state,
 resolver metrics/proposals, duplicate-aware existing TODO/Learning context, and
-evidence gaps. Daily Learning decision bundles may persist a no-action Run and
+evidence gaps. SRE evidence includes source/quiet-time confirmation, local and
+configured-target health slots, retrieval-quality baseline evidence, and a
+privacy-safe `memory-stargraph-sre-numeric-evidence-v1` block. That numeric
+block is read-only and carries CPU, memory, disk, cache, open-file,
+queue/backlog, health/search latency, 7-day and 30-day baseline, backup
+freshness, and restore-rehearsal recency samples with explicit units, sampling
+windows, thresholds, source/readback timestamps, and truthful
+missing/stale/partial states. Weekly resilience uses the same offline bridge
+with `--mode weekly_resilience` for the read-only evidence phase before any
+separately authorized weekly synthetic load or safe-fault reasoning. Daily
+Learning decision bundles may persist a no-action Run and
 report, a Learning node under `notes/memory-stargraph-learnings/`, or a planned
 TODO under `notes/memory-starmap-todo-list/` with duplicate-policy metadata.
 

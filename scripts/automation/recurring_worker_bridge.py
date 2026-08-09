@@ -6,6 +6,9 @@ import datetime as dt
 import json
 import os
 import re
+import resource
+import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -465,14 +468,262 @@ def stargraph_raw(slug: str, *, timeout: int = 45) -> str | None:
 
 
 def local_health() -> dict[str, object]:
+    started = time.monotonic()
     result = run_cmd(["curl", "-sk", "--max-time", "10", "https://127.0.0.1:8788/api/health"], timeout=15)
+    elapsed_ms = round((time.monotonic() - started) * 1000, 3)
     if result.returncode != 0:
-        return {"ok": False, "error": (result.stderr or result.stdout).strip()}
+        return {"ok": False, "error": (result.stderr or result.stdout).strip(), "latency_ms": elapsed_ms}
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return {"ok": False, "error": "invalid health json"}
-    return {"ok": payload.get("ok"), "ui_version": payload.get("ui_version"), "loaded": payload.get("loaded"), "source": payload.get("source")}
+        return {"ok": False, "error": "invalid health json", "latency_ms": elapsed_ms}
+    return {"ok": payload.get("ok"), "ui_version": payload.get("ui_version"), "loaded": payload.get("loaded"), "source": payload.get("source"), "latency_ms": elapsed_ms}
+
+
+def numeric_sample(value: float | int | None, unit: str, *, status: str = "ok", window: str = "instant", threshold: dict[str, object] | None = None, source: str = "host_read_only", observed_at: str | None = None, detail: str = "") -> dict[str, object]:
+    return {
+        "status": status if value is not None else "missing",
+        "value": value,
+        "unit": unit,
+        "window": window,
+        "threshold": threshold or {},
+        "source": source,
+        "observed_at": observed_at or iso_now(),
+        "detail": detail,
+    }
+
+
+def safe_file_age_seconds(path: Path, observed: dt.datetime) -> int | None:
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, tz=dt.timezone.utc)
+    except OSError:
+        return None
+    return max(0, int((observed.astimezone(dt.timezone.utc) - mtime).total_seconds()))
+
+
+def collect_memory_sample(observed_at: str) -> dict[str, object]:
+    vm = run_cmd(["vm_stat"], timeout=5)
+    if vm.returncode != 0:
+        return {
+            "available_mb": numeric_sample(None, "MiB", status="missing", source="vm_stat", observed_at=observed_at, detail="vm_stat unavailable"),
+            "total_mb": numeric_sample(None, "MiB", status="missing", source="vm_stat", observed_at=observed_at, detail="vm_stat unavailable"),
+        }
+    page_size = 4096
+    page_match = re.search(r"page size of (\d+) bytes", vm.stdout)
+    if page_match:
+        page_size = int(page_match.group(1))
+    counts: dict[str, int] = {}
+    for line in vm.stdout.splitlines():
+        match = re.match(r"Pages ([^:]+):\s+(\d+)", line.strip().rstrip("."))
+        if match:
+            counts[match.group(1).strip().lower()] = int(match.group(2))
+    free_pages = counts.get("free", 0) + counts.get("speculative", 0) + counts.get("inactive", 0)
+    available_mb = round(free_pages * page_size / (1024 * 1024), 2) if free_pages else 0
+    memsize = run_cmd(["sysctl", "-n", "hw.memsize"], timeout=5)
+    total_mb = None
+    if memsize.returncode == 0 and memsize.stdout.strip().isdigit():
+        total_mb = round(int(memsize.stdout.strip()) / (1024 * 1024), 2)
+    return {
+        "available_mb": numeric_sample(available_mb, "MiB", threshold={"warn_below_mb": 1024}, source="vm_stat", observed_at=observed_at),
+        "total_mb": numeric_sample(total_mb, "MiB", source="sysctl hw.memsize", observed_at=observed_at),
+    }
+
+
+def collect_resource_storage_samples(root: Path, observed_at: str) -> dict[str, object]:
+    observed = parse_time(observed_at)
+    cpu_count = os.cpu_count() or 1
+    load_1m = os.getloadavg()[0] if hasattr(os, "getloadavg") else None
+    disk = shutil.disk_usage(Path.cwd())
+    cache_path = Path("data/graph_cache.json")
+    cache_bytes = cache_path.stat().st_size if cache_path.exists() else None
+    soft_open_files, hard_open_files = resource.getrlimit(resource.RLIMIT_NOFILE)
+    fd_dir = Path("/dev/fd")
+    try:
+        open_fd_count = len(list(fd_dir.iterdir()))
+    except OSError:
+        open_fd_count = None
+    normalized_load = round(load_1m / cpu_count, 4) if load_1m is not None and cpu_count else None
+    normalized_status = "ok"
+    if normalized_load is not None and normalized_load >= 1.0:
+        normalized_status = "critical"
+    elif normalized_load is not None and normalized_load >= 0.75:
+        normalized_status = "warn"
+    return {
+        "cpu": {
+            "logical_cores": numeric_sample(cpu_count, "count", source="os.cpu_count", observed_at=observed_at),
+            "load_average_1m": numeric_sample(round(load_1m, 3) if load_1m is not None else None, "load", threshold={"warn_above_normalized": 0.75, "critical_above_normalized": 1.0}, source="os.getloadavg", observed_at=observed_at),
+            "normalized_load_1m": numeric_sample(normalized_load, "ratio", status=normalized_status, threshold={"warn_above": 0.75, "critical_above": 1.0}, source="derived", observed_at=observed_at),
+        },
+        "memory": collect_memory_sample(observed_at),
+        "disk": {
+            "total_bytes": numeric_sample(disk.total, "bytes", source="shutil.disk_usage", observed_at=observed_at),
+            "free_bytes": numeric_sample(disk.free, "bytes", threshold={"warn_below_free_ratio": 0.15, "critical_below_free_ratio": 0.08}, source="shutil.disk_usage", observed_at=observed_at),
+            "used_percent": numeric_sample(round(disk.used / disk.total * 100, 3), "percent", threshold={"warn_above_percent": 85, "critical_above_percent": 92}, source="derived", observed_at=observed_at),
+        },
+        "cache": {
+            "graph_cache_bytes": numeric_sample(cache_bytes, "bytes", source="data/graph_cache.json", observed_at=observed_at),
+            "graph_cache_age_seconds": numeric_sample(safe_file_age_seconds(cache_path, observed), "seconds", threshold={"warn_above_seconds": 7 * 24 * 3600}, source="data/graph_cache.json", observed_at=observed_at),
+        },
+        "open_files": {
+            "current_process_open_fd_count": numeric_sample(open_fd_count, "count", threshold={"warn_above_ratio": 0.7}, source="/dev/fd", observed_at=observed_at),
+            "soft_limit": numeric_sample(soft_open_files, "count", source="resource.RLIMIT_NOFILE", observed_at=observed_at),
+            "hard_limit": numeric_sample(hard_open_files, "count", source="resource.RLIMIT_NOFILE", observed_at=observed_at),
+        },
+        "bridge_spool": {
+            "incoming_count": numeric_sample(len(list((root / "incoming").glob("*.json"))) if (root / "incoming").exists() else 0, "count", source="recurring_worker_bridge_spool", observed_at=observed_at),
+            "processing_count": numeric_sample(len(list((root / "processing").glob("*.json"))) if (root / "processing").exists() else 0, "count", source="recurring_worker_bridge_spool", observed_at=observed_at, detail="includes the currently claimed request while evidence is collected"),
+            "result_count": numeric_sample(len(list((root / "results").glob("*.json"))) if (root / "results").exists() else 0, "count", source="recurring_worker_bridge_spool", observed_at=observed_at),
+        },
+    }
+
+
+def parse_backup_latest(markdown: str, observed_at: str) -> dict[str, object]:
+    observed = parse_time(observed_at)
+    timestamp = None
+    match = re.search(r"Run timestamp UTC:\s*([0-9TZ:+-]+)", markdown or "")
+    if match:
+        try:
+            timestamp = parse_time(match.group(1))
+        except BridgeError:
+            timestamp = None
+    age_seconds = int((observed.astimezone(dt.timezone.utc) - timestamp.astimezone(dt.timezone.utc)).total_seconds()) if timestamp else None
+    exported = {}
+    for label, key in (
+        ("Resolver events exported", "resolver_events"),
+        ("Resolver proposals exported", "resolver_proposals"),
+        ("Resolver releases exported", "resolver_releases"),
+        ("Link rows exported", "link_rows"),
+        ("Tag rows exported", "tag_rows"),
+        ("File ledger rows exported", "file_ledger_rows"),
+    ):
+        found = re.search(rf"{re.escape(label)}:\s*(\d+)", markdown or "")
+        if found:
+            exported[key] = int(found.group(1))
+    status = "ok" if age_seconds is not None and age_seconds <= 36 * 3600 else ("stale" if age_seconds is not None else "missing")
+    return {
+        "status": status,
+        "latest_backup_at": timestamp.isoformat() if timestamp else "",
+        "freshness_seconds": numeric_sample(age_seconds, "seconds", status=status, threshold={"warn_above_seconds": 36 * 3600, "critical_above_seconds": 72 * 3600}, source="_backups/backup-latest", observed_at=observed_at),
+        "export_counts": {key: numeric_sample(value, "count", source="_backups/backup-latest", observed_at=observed_at) for key, value in exported.items()},
+        "evidence_slug": "_backups/backup-latest",
+    }
+
+
+def latest_weekly_restore_report() -> tuple[str, str]:
+    report_dir = Path("automations/memory-stargraph-sre/reports")
+    candidates = sorted(report_dir.glob("*weekly-resilience*85.md"), reverse=True)
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "restore" in text.lower() or "checksum" in text.lower():
+            return str(path), text
+    return "", ""
+
+
+def parse_restore_rehearsal(observed_at: str) -> dict[str, object]:
+    path, text = latest_weekly_restore_report()
+    if not text:
+        return {
+            "status": "missing",
+            "recency_seconds": numeric_sample(None, "seconds", status="missing", source="weekly_sre_report", observed_at=observed_at),
+            "checksum_matched": False,
+            "evidence_path_redacted": "",
+        }
+    date_match = re.search(r"(20\d{2}-\d{2}-\d{2})", Path(path).name)
+    rehearsal_at = None
+    if date_match:
+        rehearsal_at = dt.datetime.fromisoformat(date_match.group(1)).replace(tzinfo=PACIFIC)
+    observed = parse_time(observed_at)
+    recency = int((observed.astimezone(dt.timezone.utc) - rehearsal_at.astimezone(dt.timezone.utc)).total_seconds()) if rehearsal_at else None
+    checksum = "checksum matched" in text.lower() or "checksums matched" in text.lower()
+    status = "ok" if checksum and recency is not None and recency <= 8 * 24 * 3600 else ("stale" if recency is not None else "partial")
+    return {
+        "status": status,
+        "recency_seconds": numeric_sample(recency, "seconds", status=status, threshold={"warn_above_seconds": 8 * 24 * 3600, "critical_above_seconds": 31 * 24 * 3600}, source="weekly_sre_report", observed_at=observed_at),
+        "checksum_matched": checksum,
+        "evidence_path_redacted": "automations/memory-stargraph-sre/reports/latest-weekly-resilience",
+    }
+
+
+def parse_latency_baselines(observed_at: str) -> dict[str, object]:
+    report_dir = Path("automations/memory-stargraph-sre/reports")
+    search_seconds: list[float] = []
+    health_seconds: list[float] = []
+    for path in sorted(report_dir.glob("*.md"))[-80:]:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in re.finditer(r"search-read.*?HTTP 200 in ([0-9.]+)s", text, re.IGNORECASE):
+            search_seconds.append(float(match.group(1)))
+        for match in re.finditer(r"health.*?HTTP 200(?: in)? ([0-9.]+)s", text, re.IGNORECASE):
+            health_seconds.append(float(match.group(1)))
+    def baseline(values: list[float], window_days: int) -> dict[str, object]:
+        sample = values[-window_days:] if values else []
+        return {
+            "sample_count": numeric_sample(len(sample), "count", source="sre_reports", observed_at=observed_at),
+            "max_ms": numeric_sample(round(max(sample) * 1000, 3) if sample else None, "ms", status="ok" if sample else "missing", source="sre_reports", observed_at=observed_at),
+            "median_ms": numeric_sample(round(statistics.median(sample) * 1000, 3) if sample else None, "ms", status="ok" if sample else "missing", source="sre_reports", observed_at=observed_at),
+        }
+    return {
+        "search_7_day": baseline(search_seconds, 7),
+        "search_30_day": baseline(search_seconds, 30),
+        "health_7_day": baseline(health_seconds, 7),
+        "health_30_day": baseline(health_seconds, 30),
+        "evidence_source": "redacted_local_sre_reports",
+    }
+
+
+def collect_sre_numeric_evidence(root: Path, values: dict[str, str], health: dict[str, object]) -> dict[str, object]:
+    observed_at = iso_now()
+    ok, backlog = gbrain_get("notes/memory-starmap-todo-list", timeout=30)
+    todo_counts = {"planned": 0, "implementing": 0, "completed": 0, "failed": 0}
+    if ok:
+        for line in backlog.splitlines():
+            match = re.match(r"\|\s*SG-\d+\s*\|\s*([^|]+)\|", line)
+            if match and match.group(1).strip() in todo_counts:
+                todo_counts[match.group(1).strip()] += 1
+    backup_ok, backup_text = gbrain_get("_backups/backup-latest", timeout=30)
+    resource_storage = collect_resource_storage_samples(root, observed_at)
+    return {
+        "schema": "memory-stargraph-sre-numeric-evidence-v1",
+        "read_only": True,
+        "privacy_safe": True,
+        "mode": values.get("mode") or "daily_reliability",
+        "observed_at": observed_at,
+        "sampling_window": "single bounded host snapshot plus redacted SRE report baselines",
+        "threshold_policy": "warn/critical thresholds are explicit per sample; missing/stale/partial never imply pass",
+        "units_contract": "Every numeric sample carries value, unit, window, threshold, source, observed_at, and status.",
+        "health_latency": {
+            "local_health_ms": numeric_sample(health.get("latency_ms") if isinstance(health, dict) else None, "ms", threshold={"warn_above_ms": 1000, "critical_above_ms": 5000}, source="/api/health", observed_at=observed_at),
+        },
+        "resources": resource_storage,
+        "queue_backlog": {
+            "todo_counts": {key: numeric_sample(value, "count", source="notes/memory-starmap-todo-list", observed_at=observed_at) for key, value in todo_counts.items()},
+            "todo_backlog_read_status": "ok" if ok else "missing",
+            "capture_link_spool": {
+                "incoming_count": numeric_sample(len(list(Path("var/capture-link-runner/incoming").glob("*.json"))) if Path("var/capture-link-runner/incoming").exists() else 0, "count", source="capture_link_spool", observed_at=observed_at),
+                "processing_count": numeric_sample(len(list(Path("var/capture-link-runner/processing").glob("*.json"))) if Path("var/capture-link-runner/processing").exists() else 0, "count", threshold={"critical_above": 0}, source="capture_link_spool", observed_at=observed_at),
+            },
+        },
+        "latency_baselines": parse_latency_baselines(observed_at),
+        "backup": parse_backup_latest(backup_text if backup_ok else "", observed_at),
+        "restore_rehearsal": parse_restore_rehearsal(observed_at),
+        "evidence_gaps": [
+            key for key, missing in {
+                "todo_backlog": not ok,
+                "backup_latest": not backup_ok,
+            }.items() if missing
+        ],
+        "prohibited_actions": {
+            "service_restart": False,
+            "backup_mutation": False,
+            "production_mutation": False,
+            "resolver_auto_approval": False,
+        },
+    }
 
 
 def gather_learning_evidence(root: Path, values: dict[str, str]) -> dict[str, object]:
@@ -519,22 +770,28 @@ def gather_learning_evidence(root: Path, values: dict[str, str]) -> dict[str, ob
 
 def gather_sre_evidence(root: Path, values: dict[str, str]) -> dict[str, object]:
     write_phase(root, values, "source_quiet_time")
-    quiet = {"active_tags_expected_clear": True, "mode": "daily_reliability", "remediation_authorized": False}
+    mode = values.get("mode") or "daily_reliability"
+    quiet = {"active_tags_expected_clear": True, "mode": mode, "remediation_authorized": False}
     write_phase(root, values, "local_health")
     health = local_health()
     write_phase(root, values, "read_only_metrics")
     retrieval_quality = retrieval_quality_benchmark.run_benchmark(started_at=iso_now())
+    write_phase(root, values, "numeric_sre_evidence")
+    numeric_evidence = collect_sre_numeric_evidence(root, values, health)
     metrics = {
-        "latency": {"health_probe": "bounded"},
+        "latency": {"health_probe": "bounded", "local_health_ms": numeric_evidence["health_latency"]["local_health_ms"]},
         "retrieval_quality_baseline": {
             "schema": retrieval_quality["schema"],
             "summary": retrieval_quality["summary"],
             "gate": retrieval_quality["gate"],
             "synthetic_corpus": retrieval_quality["privacy"]["synthetic_corpus"],
         },
-        "resources": {"status": "read_only_not_mutating"},
-        "storage": {"status": "read_only_not_mutating"},
-        "backup": {"status": "evidence_slot_present"},
+        "resources": {"status": "read_only_not_mutating", **numeric_evidence["resources"]},
+        "storage": {"status": "read_only_not_mutating", "disk": numeric_evidence["resources"]["disk"], "cache": numeric_evidence["resources"]["cache"]},
+        "backup": {"status": numeric_evidence["backup"]["status"], **numeric_evidence["backup"]},
+        "restore_rehearsal": numeric_evidence["restore_rehearsal"],
+        "queue_backlog": numeric_evidence["queue_backlog"],
+        "latency_baselines": numeric_evidence["latency_baselines"],
         "resolver": {"status": "read_only", "events_created": 0},
     }
     return {
@@ -543,8 +800,9 @@ def gather_sre_evidence(root: Path, values: dict[str, str]) -> dict[str, object]
         "source_quiet_time": quiet,
         "targets": {"local": health, "dashboard": health, "remote_102": {"status": "configured_probe_slot", "mutates": False}},
         "metrics": metrics,
+        "numeric_sre_evidence": numeric_evidence,
         "incident_classification": {"incident": False, "remediation_attempted": False, "reason": "synthetic/read-only evidence cycle"},
-        "evidence_gaps": [],
+        "evidence_gaps": numeric_evidence["evidence_gaps"],
     }
 
 
@@ -616,7 +874,11 @@ def persist_decision(root: Path, values: dict[str, str]) -> dict[str, object]:
         write_phase(root, values, "artifact_persistence", processed=index, total=len(artifacts), extra={"slug": slug})
         gbrain_put(slug, str(artifact["markdown"]))
         persisted.append({"slug": slug, "kind": artifact["kind"], "readback_verified": True})
-    return {"decision_type": decision_type, "artifacts": persisted, "artifact_count": len(persisted)}
+    numeric_summary = bundle.get("numeric_sre_evidence_summary")
+    if values["role"] == "sre_daily_reliability" and numeric_summary is not None:
+        if not isinstance(numeric_summary, dict) or numeric_summary.get("schema") != "memory-stargraph-sre-numeric-evidence-v1":
+            raise BridgePhaseError("decision_bundle_validation", "invalid numeric_sre_evidence_summary")
+    return {"decision_type": decision_type, "artifacts": persisted, "artifact_count": len(persisted), **({"numeric_sre_evidence_summary": numeric_summary} if isinstance(numeric_summary, dict) else {})}
 
 
 def process_values(root: Path, values: dict[str, str], claim: dict[str, object]) -> dict[str, object]:
@@ -770,6 +1032,7 @@ def main(argv: list[str] | None = None) -> int:
     submit.add_argument("--operation", choices=["evidence", "persist"], required=True)
     submit.add_argument("--invocation-id", required=True)
     submit.add_argument("--expected-commit", required=True)
+    submit.add_argument("--mode", default="auto")
     submit.add_argument("--nonce")
     submit.add_argument("--bundle-file")
     submit.add_argument("--synthetic", action="store_true")
@@ -793,7 +1056,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.runtime_dir)
     try:
         if args.command == "submit":
-            payload = make_request(args.role, args.operation, args.invocation_id, args.expected_commit, nonce=args.nonce, bundle_file=args.bundle_file, synthetic=args.synthetic)
+            payload = make_request(args.role, args.operation, args.invocation_id, args.expected_commit, nonce=args.nonce, mode=args.mode, bundle_file=args.bundle_file, synthetic=args.synthetic)
             result = submit_request(root, payload)
         elif args.command == "status":
             result = read_status(root, args.invocation_id, args.operation)
