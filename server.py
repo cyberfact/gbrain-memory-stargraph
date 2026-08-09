@@ -3,6 +3,7 @@ import argparse
 import email
 import email.policy
 import hashlib
+import hmac
 import json
 import math
 import mimetypes
@@ -25,8 +26,26 @@ from urllib.parse import quote, unquote, urlparse
 from urllib.parse import parse_qs
 from urllib.request import Request, urlopen
 
+from openclaw_profile_activation import (
+    ActivationConflict,
+    ActivationError,
+    OpenClawProfileActivationExecutor,
+    STATUS_ENDPOINT_BUDGET_SECONDS,
+    activation_from_environment,
+)
+
 
 APP_NAME = "Memory Stargraph"
+OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS = STATUS_ENDPOINT_BUDGET_SECONDS
+
+
+class MemoryStargraphHTTPServer(ThreadingHTTPServer):
+    """Join request handlers before process-long services are closed."""
+
+    daemon_threads = False
+    block_on_close = True
+
+
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = {
     "host": "127.0.0.1",
@@ -1379,6 +1398,73 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
     if parsed_list is not None:
         return parsed_list
     return {"output": output}
+
+
+OPENCLAW_PROFILE_ACTIVATION_SERVICE = None
+OPENCLAW_PROFILE_ACTIVATION_EXECUTOR = None
+OPENCLAW_PROFILE_ACTIVATION_RUNTIME_LOCK = threading.Lock()
+
+
+def openclaw_profile_activation_service():
+    """Return the one process-long private activation service."""
+    service = OPENCLAW_PROFILE_ACTIVATION_SERVICE
+    if service is None:
+        state = (
+            "unavailable"
+            if os.environ.get("MEMORY_STARGRAPH_OC_PROVISION_ENABLED") == "1"
+            else "disabled"
+        )
+        raise ActivationError(f"OpenClaw provisioning is {state}")
+    return service
+
+
+def openclaw_profile_activation_executor():
+    return OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
+
+
+def start_openclaw_profile_activation_runtime():
+    global OPENCLAW_PROFILE_ACTIVATION_SERVICE
+    global OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
+    if os.environ.get("MEMORY_STARGRAPH_OC_PROVISION_ENABLED") != "1":
+        return None
+    with OPENCLAW_PROFILE_ACTIVATION_RUNTIME_LOCK:
+        if OPENCLAW_PROFILE_ACTIVATION_SERVICE is not None:
+            return OPENCLAW_PROFILE_ACTIVATION_SERVICE
+        service = activation_from_environment(gbrain_call_tool)
+        service.start()
+        try:
+            executor = OpenClawProfileActivationExecutor(lambda: service)
+            executor.start()
+        except BaseException:
+            service.close()
+            raise
+        OPENCLAW_PROFILE_ACTIVATION_SERVICE = service
+        OPENCLAW_PROFILE_ACTIVATION_EXECUTOR = executor
+        return service
+
+
+def stop_openclaw_profile_activation_runtime():
+    global OPENCLAW_PROFILE_ACTIVATION_SERVICE
+    global OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
+    with OPENCLAW_PROFILE_ACTIVATION_RUNTIME_LOCK:
+        service = OPENCLAW_PROFILE_ACTIVATION_SERVICE
+        executor = OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
+        OPENCLAW_PROFILE_ACTIVATION_SERVICE = None
+        OPENCLAW_PROFILE_ACTIVATION_EXECUTOR = None
+    if executor is not None:
+        try:
+            executor.stop()
+        finally:
+            if service is not None:
+                service.close()
+    elif service is not None:
+        service.close()
+
+
+def openclaw_provisioning_authorized(headers):
+    token = os.environ.get("MEMORY_STARGRAPH_OC_PROVISION_TOKEN", "")
+    supplied = headers.get("Authorization", "") if headers else ""
+    return bool(token) and hmac.compare_digest(str(supplied), f"Bearer {token}")
 
 
 def resolver_submit_event(payload):
@@ -6780,6 +6866,52 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.serve_media_file(parsed.path)
         if parsed.path.startswith("/gbrain-files/"):
             return self.serve_gbrain_file(parsed.path)
+        operation_prefix = "/api/internal/openclaw-profiles/operations/"
+        if parsed.path.startswith(operation_prefix):
+            if not openclaw_provisioning_authorized(self.headers):
+                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            operation_id = unquote(parsed.path[len(operation_prefix) :]).strip("/")
+            if not operation_id or "/" in operation_id:
+                return self.end_json(
+                    {"error": "operation_id is required"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+            try:
+                return self.end_json(
+                    {
+                        "ok": True,
+                        **openclaw_profile_activation_service().status(operation_id),
+                    }
+                )
+            except ActivationConflict as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
+            except (ActivationError, RuntimeError) as exc:
+                return self.end_json(
+                    {"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE
+                )
+        if parsed.path == "/api/internal/openclaw-profiles/active":
+            if not openclaw_provisioning_authorized(self.headers):
+                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            try:
+                projection = (
+                    openclaw_profile_activation_service().cached_active_projection()
+                )
+                response_status = HTTPStatus.OK
+                if projection.get("status") == "validation_pending":
+                    executor = openclaw_profile_activation_executor()
+                    if executor is None:
+                        raise ActivationError(
+                            "OpenClaw activation executor is unavailable"
+                        )
+                    executor.request_projection_validation()
+                    response_status = HTTPStatus.ACCEPTED
+                return self.end_json(
+                    {"ok": True, **projection}, status=response_status
+                )
+            except ActivationConflict as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
+            except (ActivationError, RuntimeError) as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         if parsed.path == "/api/health":
             graph = STORE.get_health_graph()
             return self.end_json(
@@ -6997,6 +7129,77 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        operation_prefix = "/api/internal/openclaw-profiles/operations/"
+        if parsed.path.startswith(operation_prefix) and parsed.path.endswith("/recover"):
+            if not openclaw_provisioning_authorized(self.headers):
+                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            operation_id = unquote(
+                parsed.path[len(operation_prefix) : -len("/recover")]
+            ).strip("/")
+            if not operation_id or "/" in operation_id:
+                return self.end_json(
+                    {"error": "operation_id is required"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+            try:
+                recovery = openclaw_profile_activation_service().request_recovery(
+                    operation_id
+                )
+                executor = openclaw_profile_activation_executor()
+                if executor is None:
+                    raise ActivationError(
+                        "OpenClaw activation executor is unavailable"
+                    )
+                executor.wake()
+                return self.end_json(
+                    {
+                        "ok": True,
+                        **recovery,
+                    }
+                )
+            except ActivationConflict as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
+            except (ActivationError, RuntimeError) as exc:
+                return self.end_json(
+                    {"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE
+                )
+        if parsed.path == "/api/internal/openclaw-profiles/provision":
+            if not openclaw_provisioning_authorized(self.headers):
+                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            try:
+                payload = self.read_json_body()
+                declarations = payload.get("declarations") if isinstance(payload, dict) else None
+                owner = str(payload.get("owner") or "") if isinstance(payload, dict) else ""
+                operation_id = str(payload.get("operation_id") or "") if isinstance(payload, dict) else ""
+                if not isinstance(declarations, list) or not owner or not operation_id:
+                    raise ValueError("declarations, owner, and operation_id are required")
+                activation = openclaw_profile_activation_service()
+                receipt = activation.submit(
+                    declarations,
+                    owner=owner,
+                    operation_id=operation_id,
+                )
+                if receipt.get("status") == "accepted":
+                    executor = openclaw_profile_activation_executor()
+                    if executor is None:
+                        raise ActivationError(
+                            "OpenClaw activation executor is unavailable"
+                        )
+                    executor.wake()
+                response_status = (
+                    HTTPStatus.ACCEPTED
+                    if receipt.get("status") == "accepted"
+                    else HTTPStatus.OK
+                )
+                return self.end_json(
+                    {"ok": True, **receipt}, status=response_status
+                )
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except ActivationConflict as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
+            except (ActivationError, RuntimeError) as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)
@@ -7382,22 +7585,26 @@ def main():
     args = parser.parse_args()
 
     ensure_data_dir()
-    server = ThreadingHTTPServer((args.host, args.port), MemoryStargraphHandler)
-    scheme = "http"
-    if args.certfile or args.keyfile:
-        if not args.certfile or not args.keyfile:
-            parser.error("--certfile and --keyfile must be provided together")
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certfile=args.certfile, keyfile=args.keyfile)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
-        scheme = "https"
-    print(f"{APP_NAME} serving on {scheme}://{args.host}:{args.port}")
+    server = MemoryStargraphHTTPServer(
+        (args.host, args.port), MemoryStargraphHandler
+    )
     try:
+        scheme = "http"
+        if args.certfile or args.keyfile:
+            if not args.certfile or not args.keyfile:
+                parser.error("--certfile and --keyfile must be provided together")
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=args.certfile, keyfile=args.keyfile)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            scheme = "https"
+        start_openclaw_profile_activation_runtime()
+        print(f"{APP_NAME} serving on {scheme}://{args.host}:{args.port}")
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        stop_openclaw_profile_activation_runtime()
 
 
 if __name__ == "__main__":

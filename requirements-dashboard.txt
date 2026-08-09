@@ -1,0 +1,2 @@
+# Install only into the All Things Codex Dashboard-managed Memory Stargraph venv.
+nats-py==2.15.0

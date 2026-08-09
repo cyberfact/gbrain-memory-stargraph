@@ -271,6 +271,7 @@ Safety:
 - `docs/memory-stargraph-remote-gbrain-media-import-runbook.md` - remote-host topology and cache-recovery extension to the canonical attachment contract
 - `docs/automation-runbook.md` - daily automation runbook with host routes, deploy checks, and the five-minute retrospective hook
 - `docs/resolver-feedback-loop-runbook.md` - Codex/OpenClaw resolver telemetry, human approval, release distribution, nightly learning, backup, and rollback
+- `docs/openclaw-profile-activation-runbook.md` - private configuration and CAS activation protocol for staged OpenClaw Agent profiles
 - `dashboard-integration.json` - All Things Codex Dashboard launcher metadata
 
 ## Verification
