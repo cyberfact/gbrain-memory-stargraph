@@ -2312,7 +2312,7 @@ def parse_search_results(output):
 
 EVIDENCE_SEARCH_TYPES = ("learning", "todo", "report", "run")
 SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
-SEARCH_TOTAL_BUDGET_SECONDS = 9.2
+SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
