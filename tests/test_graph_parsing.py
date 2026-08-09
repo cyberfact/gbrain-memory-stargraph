@@ -198,6 +198,48 @@ class GraphParsingTests(unittest.TestCase):
             coverage["search_slugs"],
         )
 
+    def test_search_raw_graph_reserves_evidence_budget_when_primary_times_out(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [
+                {
+                    "slug": "notes/memory-starmap-todo-list/persist-global-active-tag-readback-in-capture-link-terminal-results",
+                    "id": "sg0193",
+                    "label": "Persist global active tag readback in Capture Link terminal results",
+                    "type": "todo",
+                    "summary": "Optional timeout telemetry is not a todo appeared in lifecycle evidence.",
+                    "tags": ["todo"],
+                    "links": [],
+                }
+            ],
+            "edge_types": [],
+        }
+        primary_timeouts = []
+
+        def fake_run_gbrain(*args, **kwargs):
+            if args == ("search", "optional timeout telemetry is not a todo"):
+                primary_timeouts.append(kwargs.get("timeout"))
+                raise TimeoutError(args)
+            if args == ("list", "--type", "learning", "-n", "40"):
+                return "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo\tlearning\t2026-07-28\tOptional timeout telemetry is not a todo\n"
+            if args[0] == "list":
+                return ""
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "optional timeout telemetry is not a todo")
+
+        coverage = graph["source"]["coverage"]
+        self.assertLessEqual(primary_timeouts[0], 5.25)
+        self.assertEqual(coverage["search_primary_status"], "timeout")
+        self.assertEqual(coverage["search_evidence_status"], "complete")
+        self.assertEqual(coverage["search_status"], "partial_timeout")
+        self.assertEqual(
+            coverage["search_slugs"][0],
+            "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+        )
+
     def test_merge_search_results_keeps_exact_primary_above_partial_broad_evidence(self):
         results = merge_search_results(
             [

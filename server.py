@@ -3971,7 +3971,11 @@ def search_raw_graph(raw_graph, query):
         primary_status = "timeout"
     else:
         try:
-            search_output = run_gbrain("search", query, timeout=max(0.5, min(SEARCH_PRIMARY_TIMEOUT_SECONDS, remaining)))
+            primary_budget = min(
+                SEARCH_PRIMARY_TIMEOUT_SECONDS,
+                max(0.5, remaining - SEARCH_EVIDENCE_BUDGET_SECONDS),
+            )
+            search_output = run_gbrain("search", query, timeout=primary_budget)
             primary_results = parse_search_results(search_output)
         except Exception:  # noqa: BLE001
             primary_results = []
