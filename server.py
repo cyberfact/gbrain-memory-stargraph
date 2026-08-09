@@ -2581,6 +2581,14 @@ def loaded_graph_search_results(raw_graph, query, existing_slugs=None, result_li
         tags = " ".join(str(tag) for tag in node.get("tags") or [])
         haystack = f"{slug} {label} {summary} {tags}".lower().replace("_", "-")
         score = 0.0
+        identity_query = normalized_search_identity(query)
+        label_words = normalized_search_identity(label)
+        slug_words = normalized_search_identity(slug)
+        label_is_truncated = label.endswith("...")
+        if identity_query and (slug_words == identity_query or (label_words == identity_query and not label_is_truncated)):
+            score += 100.0
+        elif identity_query and label_words.startswith(identity_query) and not label_is_truncated:
+            score += 25.0
         if query_text and query_text in haystack:
             score += 20.0
         for term in terms:

@@ -303,6 +303,48 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(coverage["search_results"], 0)
         self.assertEqual(coverage["search_slugs"], [])
 
+    def test_search_raw_graph_loaded_product_identity_survives_live_timeouts(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [
+                {
+                    "slug": "runs/memory-stargraph-sre-daily-reliability-2026-08-09-sg0179-7b329889",
+                    "id": "run",
+                    "label": "Memory Stargraph...",
+                    "type": "run",
+                    "summary": "Truncated loaded run label",
+                    "tags": [],
+                    "links": [],
+                },
+                {
+                    "slug": "products/memory-stargraph",
+                    "id": "product",
+                    "label": "Memory Stargraph",
+                    "type": "product",
+                    "summary": "Product node",
+                    "tags": [],
+                    "links": [],
+                },
+            ],
+            "edge_types": [],
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args == ("search", "memory stargraph"):
+                raise TimeoutError(args)
+            if args[0] == "list":
+                raise TimeoutError(args)
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "memory stargraph")
+
+        coverage = graph["source"]["coverage"]
+        self.assertEqual(coverage["search_status"], "partial_timeout")
+        self.assertEqual(coverage["search_primary_status"], "timeout")
+        self.assertEqual(coverage["search_slugs"][0], "products/memory-stargraph")
+
     def test_merge_search_results_keeps_exact_primary_above_partial_broad_evidence(self):
         results = merge_search_results(
             [
