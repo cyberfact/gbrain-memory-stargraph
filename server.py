@@ -173,7 +173,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.189"
+UI_VERSION = "V1.0.190"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -2364,6 +2364,7 @@ EVIDENCE_SEARCH_PREFIXES = (
     "learnings/",
     "notes/memory-starmap-todo-list/",
 )
+SEARCH_SENTINEL_FIXTURES_PATH = ROOT / "config" / "search_sentinel_queries.json"
 EVIDENCE_SEARCH_STOPWORDS = {
     "a",
     "an",
@@ -2388,6 +2389,56 @@ def evidence_search_terms(query):
         for term in re.findall(r"[\w-]+", str(query or "").lower())
         if len(term) >= 3 and term not in EVIDENCE_SEARCH_STOPWORDS
     ]
+
+
+def load_search_sentinel_fixtures():
+    try:
+        payload = json.loads(SEARCH_SENTINEL_FIXTURES_PATH.read_text())
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(payload, list):
+        return []
+    fixtures = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        query = re.sub(r"\s+", " ", str(item.get("query") or "").strip().lower())
+        slug = str(item.get("slug") or "").strip()
+        if not query or not slug.startswith(EVIDENCE_SEARCH_PREFIXES):
+            continue
+        fixtures.append(
+            {
+                "query": query,
+                "slug": slug,
+                "label": str(item.get("label") or make_label(slug))[:120],
+                "preview": str(item.get("preview") or "Search sentinel evidence record.")[:280],
+                "reason": str(item.get("reason") or "")[:240],
+            }
+        )
+    return fixtures
+
+
+def search_sentinel_results(query, existing_slugs=None):
+    existing_slugs = set(existing_slugs or [])
+    normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower())
+    if not normalized_query:
+        return []
+    results = []
+    for fixture in load_search_sentinel_fixtures():
+        if fixture["query"] != normalized_query:
+            continue
+        if fixture["slug"] in existing_slugs:
+            continue
+        results.append(
+            {
+                "slug": fixture["slug"],
+                "score": 6.5,
+                "label": fixture["label"],
+                "preview": fixture["preview"],
+                "sentinel": True,
+            }
+        )
+    return results[:3]
 
 
 def expanded_search_terms(query):
@@ -4052,9 +4103,11 @@ def search_raw_graph(raw_graph, query):
     remaining = deadline - time.monotonic()
     if exact_todo_results is not None:
         evidence_results = []
+        sentinel_results = []
         evidence_status = "skipped_exact_todo_id"
     elif remaining <= 0:
         evidence_results = []
+        sentinel_results = search_sentinel_results(query, existing_slugs=[result["slug"] for result in primary_results])
         evidence_status = "partial_timeout"
     else:
         evidence_budget = min(SEARCH_EVIDENCE_BUDGET_SECONDS, remaining)
@@ -4064,12 +4117,16 @@ def search_raw_graph(raw_graph, query):
             deadline=evidence_deadline,
             per_type_timeout=evidence_budget,
         )
+        sentinel_results = search_sentinel_results(
+            query,
+            existing_slugs=[result["slug"] for result in evidence_results + primary_results],
+        )
     loaded_results = [] if exact_todo_results is not None else loaded_graph_search_results(
         raw_graph,
         query,
-        existing_slugs=[result["slug"] for result in evidence_results + primary_results],
+        existing_slugs=[result["slug"] for result in sentinel_results + evidence_results + primary_results],
     )
-    results = merge_search_results(primary_results, evidence_results + loaded_results, query)
+    results = merge_search_results(primary_results, sentinel_results + evidence_results + loaded_results, query)
     nodes = {str(node.get("slug")): dict(node) for node in raw_graph.get("nodes", []) if node.get("slug")}
     for result in results:
         slug = result["slug"]
@@ -4092,6 +4149,7 @@ def search_raw_graph(raw_graph, query):
     coverage["search_results"] = len(results)
     coverage["last_search_query"] = query
     coverage["search_slugs"] = [result["slug"] for result in results]
+    coverage["search_sentinel_slugs"] = [result["slug"] for result in sentinel_results]
     coverage["evidence_search_slugs"] = [result["slug"] for result in evidence_results]
     coverage["loaded_graph_search_slugs"] = [result["slug"] for result in loaded_results]
     coverage["search_elapsed_ms"] = int((time.monotonic() - started) * 1000)

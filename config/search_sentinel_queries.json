@@ -1,0 +1,9 @@
+[
+  {
+    "query": "optional timeout telemetry is not a todo",
+    "slug": "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+    "label": "Optional timeout telemetry is not a todo",
+    "preview": "Sentinel Learning for the optional-timeout telemetry natural-language query.",
+    "reason": "Protects an established Learning answer from later high-volume operational evidence that quotes the same query."
+  }
+]

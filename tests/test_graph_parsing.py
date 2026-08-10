@@ -407,6 +407,49 @@ class GraphParsingTests(unittest.TestCase):
             [result["slug"] for result in results],
         )
 
+    def test_search_raw_graph_uses_sentinel_when_operational_growth_hijacks_loaded_results(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [
+                {
+                    "slug": "notes/memory-starmap-todo-list/add-numeric-sre-capacity-backup-and-restore-evidence",
+                    "id": "sg0196",
+                    "label": "Add numeric SRE capacity backup and restore evidence",
+                    "type": "todo",
+                    "summary": 'UX evidence query "optional timeout telemetry is not a todo" appeared in SRE evidence growth.',
+                    "tags": ["todo"],
+                    "links": [],
+                }
+            ],
+            "edge_types": [],
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args == ("search", "optional timeout telemetry is not a todo"):
+                raise TimeoutError(args)
+            if args[0] == "list":
+                raise TimeoutError(args)
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "optional timeout telemetry is not a todo")
+
+        coverage = graph["source"]["coverage"]
+        self.assertEqual(coverage["search_status"], "partial_timeout")
+        self.assertEqual(
+            coverage["search_slugs"][0],
+            "learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo",
+        )
+        self.assertEqual(
+            coverage["search_sentinel_slugs"],
+            ["learnings/memory-stargraph-intake-2026-07-28-optional-timeout-telemetry-is-not-a-todo"],
+        )
+        self.assertIn(
+            "notes/memory-starmap-todo-list/add-numeric-sre-capacity-backup-and-restore-evidence",
+            coverage["loaded_graph_search_slugs"],
+        )
+
     def test_merge_search_results_prefers_exact_product_label_for_product_name_query(self):
         results = merge_search_results(
             [
