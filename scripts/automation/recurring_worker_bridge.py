@@ -25,6 +25,13 @@ from scripts.automation import retrieval_quality_benchmark
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 SCHEMA_VERSION = 1
+SRE_EVIDENCE_SCHEMA = "memory-stargraph-sre-evidence-v1"
+SRE_NUMERIC_EVIDENCE_SCHEMA = "memory-stargraph-sre-numeric-evidence-v1"
+LEARNING_EVIDENCE_SCHEMA = "memory-stargraph-learning-evidence-v1"
+SUPPORTED_EVIDENCE_SCHEMAS = {
+    "daily_learning_intake": {LEARNING_EVIDENCE_SCHEMA},
+    "sre_daily_reliability": {SRE_EVIDENCE_SCHEMA, SRE_NUMERIC_EVIDENCE_SCHEMA},
+}
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_BUNDLE_BYTES = 256 * 1024
 MAX_AGE_SECONDS = 6 * 60 * 60
@@ -165,6 +172,57 @@ def current_commit() -> str:
     return result.stdout.strip()
 
 
+def runner_source_identity(expected_commit: str | None = None, expected_evidence_schema: str | None = None, role: str | None = None) -> dict[str, object]:
+    try:
+        commit = current_commit()
+        commit_status = "ok"
+    except BridgePhaseError as exc:
+        commit = ""
+        commit_status = "unavailable"
+        commit_error = str(exc)
+    else:
+        commit_error = ""
+    supported = sorted(SUPPORTED_EVIDENCE_SCHEMAS.get(str(role or ""), set().union(*SUPPORTED_EVIDENCE_SCHEMAS.values())))
+    source_match = True if not expected_commit else commit == expected_commit
+    schema_match = True if not expected_evidence_schema else expected_evidence_schema in supported
+    stale_reasons = []
+    if not source_match:
+        stale_reasons.append("expected_commit_mismatch")
+    if not schema_match:
+        stale_reasons.append("expected_evidence_schema_unsupported")
+    if commit_status != "ok":
+        stale_reasons.append("runner_commit_unavailable")
+    return {
+        "runner_host_commit": commit,
+        "runner_commit_status": commit_status,
+        "runner_commit_error": commit_error,
+        "runner_started_at": BRIDGE_STARTED_AT,
+        "runner_instance_id": BRIDGE_INSTANCE_ID,
+        "runner_pid": os.getpid(),
+        "runner_source_path": str(Path(__file__).resolve()),
+        "runner_code_mtime": dt.datetime.fromtimestamp(Path(__file__).stat().st_mtime, tz=dt.timezone.utc).astimezone(PACIFIC).replace(microsecond=0).isoformat(),
+        "request_expected_commit": expected_commit or "",
+        "deployed_source_match": source_match,
+        "supported_request_schema_version": SCHEMA_VERSION,
+        "supported_evidence_schemas": supported,
+        "request_expected_evidence_schema": expected_evidence_schema or "",
+        "evidence_schema_match": schema_match,
+        "stale_runner": bool(stale_reasons),
+        "stale_reason": ",".join(stale_reasons),
+    }
+
+
+def assert_runner_fresh(values: dict[str, str]) -> dict[str, object]:
+    identity = runner_source_identity(
+        values.get("expected_commit"),
+        values.get("expected_evidence_schema"),
+        values.get("role"),
+    )
+    if identity["stale_runner"]:
+        raise BridgePhaseError("runner_identity", str(identity["stale_reason"]))
+    return identity
+
+
 def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -192,6 +250,7 @@ def remote_disabled_evidence() -> dict[str, object]:
         "runner_instance_id": BRIDGE_INSTANCE_ID,
         "runner_pid": os.getpid(),
         "runner_started_at": BRIDGE_STARTED_AT,
+        "runner_identity": runner_source_identity(),
         "configured_remote_runner_disabled": True,
         "remote_role": ".102",
         "verification": os.environ.get(
@@ -246,7 +305,7 @@ def write_phase(root: Path, values: dict[str, str], phase: str, *, processed: in
     })
 
 
-def make_request(role: str, operation: str, invocation_id: str, expected_commit: str, *, nonce: str | None = None, mode: str = "auto", bundle_file: str | None = None, synthetic: bool = False) -> dict[str, object]:
+def make_request(role: str, operation: str, invocation_id: str, expected_commit: str, *, nonce: str | None = None, mode: str = "auto", bundle_file: str | None = None, synthetic: bool = False, expected_evidence_schema: str | None = None) -> dict[str, object]:
     if role not in ALLOWED_ROLES:
         raise BridgeError(f"unsupported role: {role}")
     if operation not in ALLOWED_OPERATIONS[role]:
@@ -263,6 +322,8 @@ def make_request(role: str, operation: str, invocation_id: str, expected_commit:
         "nonce": _safe_nonce(nonce),
         "synthetic": synthetic,
     }
+    if expected_evidence_schema:
+        request["expected_evidence_schema"] = expected_evidence_schema
     if bundle_file:
         request["bundle_file"] = bundle_file
     return request
@@ -297,6 +358,11 @@ def validate_request(payload: dict[str, object], *, now: dt.datetime | None = No
         "nonce": _safe_nonce(values["nonce"]),
         "synthetic": "true" if payload.get("synthetic") else "false",
     })
+    expected_schema = payload.get("expected_evidence_schema")
+    if expected_schema is not None:
+        if not isinstance(expected_schema, str) or not expected_schema:
+            raise BridgeError("invalid expected_evidence_schema")
+        values["expected_evidence_schema"] = expected_schema
     bundle = payload.get("bundle_file")
     if bundle is not None:
         if not isinstance(bundle, str) or not bundle:
@@ -351,6 +417,11 @@ def terminal_result(values: dict[str, str], status: str, result: str, evidence: 
         "invocation_id": values["invocation_id"],
         "nonce": values["nonce"],
         "completed_at": iso_now(),
+        "runner_identity": runner_source_identity(
+            values.get("expected_commit"),
+            values.get("expected_evidence_schema"),
+            values.get("role"),
+        ),
         "evidence": evidence,
     }
 
@@ -688,7 +759,7 @@ def collect_sre_numeric_evidence(root: Path, values: dict[str, str], health: dic
     backup_ok, backup_text = gbrain_get("_backups/backup-latest", timeout=30)
     resource_storage = collect_resource_storage_samples(root, observed_at)
     return {
-        "schema": "memory-stargraph-sre-numeric-evidence-v1",
+        "schema": SRE_NUMERIC_EVIDENCE_SCHEMA,
         "read_only": True,
         "privacy_safe": True,
         "mode": values.get("mode") or "daily_reliability",
@@ -756,7 +827,7 @@ def gather_learning_evidence(root: Path, values: dict[str, str]) -> dict[str, ob
     feedback = {"path": str(feedback_path), "exists": feedback_path.exists(), "review_action": "read_only_no_mutation"}
     return {
         "role": values["role"],
-        "evidence_schema": "memory-stargraph-learning-evidence-v1",
+        "evidence_schema": LEARNING_EVIDENCE_SCHEMA,
         "health": health,
         "raw_nodes": raw_nodes,
         "evaluator": evaluator,
@@ -796,7 +867,7 @@ def gather_sre_evidence(root: Path, values: dict[str, str]) -> dict[str, object]
     }
     return {
         "role": values["role"],
-        "evidence_schema": "memory-stargraph-sre-evidence-v1",
+        "evidence_schema": SRE_EVIDENCE_SCHEMA,
         "source_quiet_time": quiet,
         "targets": {"local": health, "dashboard": health, "remote_102": {"status": "configured_probe_slot", "mutates": False}},
         "metrics": metrics,
@@ -882,9 +953,8 @@ def persist_decision(root: Path, values: dict[str, str]) -> dict[str, object]:
 
 
 def process_values(root: Path, values: dict[str, str], claim: dict[str, object]) -> dict[str, object]:
-    commit = current_commit()
-    if commit != values["expected_commit"]:
-        raise BridgePhaseError("source_validation", f"expected commit {values['expected_commit']} but host is {commit}")
+    identity = assert_runner_fresh(values)
+    commit = str(identity["runner_host_commit"])
     if values["operation"] == "evidence":
         evidence = gather_learning_evidence(root, values) if values["role"] == "daily_learning_intake" else gather_sre_evidence(root, values)
         result = "evidence_bundle_completed"
@@ -893,6 +963,7 @@ def process_values(root: Path, values: dict[str, str], claim: dict[str, object])
         result = "decision_persisted"
     bundle = {
         "host_commit": commit,
+        "runner_identity": identity,
         "request_claim": claim,
         "runner_ownership": remote_disabled_evidence(),
         "task_local_network_required": False,
@@ -977,7 +1048,7 @@ def process_one(root: Path) -> dict[str, object]:
             terminal = process_values(root, values, claim)
         except Exception as exc:
             phase = exc.phase if isinstance(exc, BridgePhaseError) else (read_state(root) or {}).get("phase", "runner")
-            terminal = terminal_result(values, "failed", f"{phase}_failed", {"error": str(exc), "failed_phase": phase, "request_claim": claim, "runner_ownership": remote_disabled_evidence()})
+            terminal = terminal_result(values, "failed", f"{phase}_failed", {"error": str(exc), "failed_phase": phase, "request_claim": claim, "runner_ownership": remote_disabled_evidence(), "runner_identity": runner_source_identity(values.get("expected_commit"), values.get("expected_evidence_schema"), values.get("role"))})
         atomic_write_json(target, terminal)
         in_process.replace(completed_path(root, values["nonce"]) if terminal["status"] == "completed" else failed_path(root, values["nonce"]))
         write_state(root, "idle", {"last_invocation_id": values["invocation_id"], "last_result": terminal["result"]})
@@ -999,6 +1070,7 @@ def health(root: Path) -> dict[str, object]:
         "runtime_root": str(root),
         "allowed_roles": sorted(ALLOWED_ROLES),
         "operation_allowlist": {role: sorted(ops) for role, ops in ALLOWED_OPERATIONS.items()},
+        "runner_identity": runner_source_identity(),
     }
 
 
@@ -1035,6 +1107,7 @@ def main(argv: list[str] | None = None) -> int:
     submit.add_argument("--mode", default="auto")
     submit.add_argument("--nonce")
     submit.add_argument("--bundle-file")
+    submit.add_argument("--expected-evidence-schema")
     submit.add_argument("--synthetic", action="store_true")
     submit.add_argument("--json", action="store_true")
     status = sub.add_parser("status")
@@ -1056,7 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.runtime_dir)
     try:
         if args.command == "submit":
-            payload = make_request(args.role, args.operation, args.invocation_id, args.expected_commit, nonce=args.nonce, mode=args.mode, bundle_file=args.bundle_file, synthetic=args.synthetic)
+            payload = make_request(args.role, args.operation, args.invocation_id, args.expected_commit, nonce=args.nonce, mode=args.mode, bundle_file=args.bundle_file, synthetic=args.synthetic, expected_evidence_schema=args.expected_evidence_schema)
             result = submit_request(root, payload)
         elif args.command == "status":
             result = read_status(root, args.invocation_id, args.operation)

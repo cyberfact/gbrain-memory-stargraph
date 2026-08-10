@@ -18,6 +18,7 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             nonce=overrides.pop("nonce", "nonce-bridge-0001"),
             synthetic=overrides.pop("synthetic", True),
             bundle_file=overrides.pop("bundle_file", None),
+            expected_evidence_schema=overrides.pop("expected_evidence_schema", None),
         )
         payload.update(overrides)
         return payload
@@ -53,6 +54,7 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
                 "--operation", "evidence",
                 "--invocation-id", "sg0196-weekly-cli-0001",
                 "--expected-commit", "abc123",
+                "--expected-evidence-schema", "memory-stargraph-sre-numeric-evidence-v1",
                 "--mode", "weekly_resilience",
                 "--nonce", "sg0196-weekly-cli-evidence",
                 "--synthetic",
@@ -61,6 +63,7 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(result, 0)
             request = json.loads(next((root / "incoming").glob("*.json")).read_text(encoding="utf-8"))
             self.assertEqual(request["mode"], "weekly_resilience")
+            self.assertEqual(request["expected_evidence_schema"], "memory-stargraph-sre-numeric-evidence-v1")
 
     def test_learning_evidence_bundle_has_required_slots_and_phase_heartbeat(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -296,6 +299,52 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             result = bridge.read_status(root, "learning-bridge-test-0001", "evidence")
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["result"], "evidence_bundle_completed")
+            self.assertEqual(result["runner_identity"]["runner_host_commit"], "abc123")
+            self.assertTrue(result["runner_identity"]["deployed_source_match"])
+            self.assertIn("memory-stargraph-learning-evidence-v1", result["runner_identity"]["supported_evidence_schemas"])
+            self.assertFalse(bridge.lock_path(root).exists())
+
+    def test_process_one_fails_closed_when_runner_commit_is_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.submit_request(root, self.make_request(expected_commit="newcommit"))
+            with (
+                mock.patch.object(bridge, "current_commit", return_value="oldcommit"),
+                mock.patch.object(bridge, "gather_learning_evidence") as gather,
+                mock.patch.dict(os.environ, {"MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED": "1"}),
+            ):
+                processed = bridge.process_one(root)
+            self.assertEqual(processed["status"], "processed")
+            gather.assert_not_called()
+            result = bridge.read_status(root, "learning-bridge-test-0001", "evidence")
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["result"], "runner_identity_failed")
+            self.assertEqual(result["evidence"]["failed_phase"], "runner_identity")
+            self.assertTrue(result["runner_identity"]["stale_runner"])
+            self.assertIn("expected_commit_mismatch", result["runner_identity"]["stale_reason"])
+            self.assertFalse(bridge.lock_path(root).exists())
+
+    def test_process_one_fails_closed_when_expected_schema_is_unsupported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            request = self.make_request(
+                role="sre_daily_reliability",
+                expected_commit="abc123",
+                expected_evidence_schema="memory-stargraph-sre-evidence-v0",
+            )
+            bridge.submit_request(root, request)
+            with (
+                mock.patch.object(bridge, "current_commit", return_value="abc123"),
+                mock.patch.object(bridge, "gather_sre_evidence") as gather,
+                mock.patch.dict(os.environ, {"MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED": "1"}),
+            ):
+                processed = bridge.process_one(root)
+            self.assertEqual(processed["status"], "processed")
+            gather.assert_not_called()
+            result = bridge.read_status(root, "learning-bridge-test-0001", "evidence")
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["result"], "runner_identity_failed")
+            self.assertIn("expected_evidence_schema_unsupported", result["runner_identity"]["stale_reason"])
             self.assertFalse(bridge.lock_path(root).exists())
 
     def test_crash_recovery_terminalizes_stale_processing(self):
@@ -321,6 +370,8 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             health = bridge.health(root)
             self.assertFalse(health["current_process_runner_enabled"])
             self.assertIn("daily_learning_intake", health["allowed_roles"])
+            self.assertIn("runner_host_commit", health["runner_identity"])
+            self.assertIn("memory-stargraph-sre-numeric-evidence-v1", health["runner_identity"]["supported_evidence_schemas"])
             self.assertTrue((health["daemon_state"] or {}).get("configured_remote_runner_disabled", True))
 
 

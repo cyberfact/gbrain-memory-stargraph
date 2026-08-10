@@ -181,6 +181,15 @@ class AutomationContractTests(unittest.TestCase):
             'MEMORY_STARGRAPH_DEPLOY_TARGETS="${MEMORY_STARGRAPH_DEPLOY_TARGETS:-}"',
             deploy,
         )
+        for phrase in (
+            "reload_recurring_bridge_if_present",
+            "verify_recurring_bridge_identity",
+            "com.tony.memory-stargraph.recurring-worker-bridge",
+            "memory-stargraph-sre-numeric-evidence-v1",
+            "recurring bridge commit mismatch",
+            "recurring bridge does not support expected schema",
+        ):
+            self.assertIn(phrase, deploy)
 
     def test_gbrain_x_intelligence_has_agent_reach_path_fallback(self):
         prompt = (
@@ -271,6 +280,9 @@ class AutomationContractTests(unittest.TestCase):
             self.assertIn(phrase, contract)
         self.assertIn("mode=daily_reliability", heartbeats)
         self.assertIn("mode=weekly_resilience", heartbeats)
+        self.assertIn("--expected-evidence-schema memory-stargraph-sre-numeric-evidence-v1", prompt)
+        self.assertIn("stale runner source/schema identity", prompt)
+        self.assertIn("expected source and schema attestation", heartbeats)
 
     def test_recurring_workers_share_source_sync_evidence_schema(self):
         worker_prompts = (
@@ -305,6 +317,25 @@ class AutomationContractTests(unittest.TestCase):
             self.assertIn("shared recurring-worker source-sync evidence schema", prompt)
             for field in required_fields:
                 self.assertIn(field, prompt, f"{prompt_path} missing {field}")
+
+    def test_recurring_bridge_contract_attests_runner_source_and_schema(self):
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        sre_prompt = (ROOT / "automations/memory-stargraph-sre/prompt.md").read_text()
+        deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
+        contract = "\n".join((runbook, sre_prompt, deploy))
+
+        for phrase in (
+            "runner_host_commit",
+            "runner_started_at",
+            "supported request/evidence schema versions",
+            "deployed-source match",
+            "stale-reason evidence",
+            "terminalizes before evidence collection",
+            "Deployments reload the launchd-managed `.85` recurring bridge",
+            "--expected-evidence-schema memory-stargraph-sre-numeric-evidence-v1",
+            "verify_recurring_bridge_identity",
+        ):
+            self.assertIn(phrase, contract)
 
     def test_weekly_resilience_has_safe_noop_fault_target_until_owner_approval(self):
         sre = (ROOT / "automations/memory-stargraph-sre/prompt.md").read_text()

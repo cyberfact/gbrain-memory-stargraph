@@ -197,12 +197,19 @@ The request/result protocol validates role and operation allowlists, ownership,
 path confinement, size limits, freshness, nonce replay/idempotence,
 single-runner concurrency, atomic claim/result rename, stale processing
 recovery, crash recovery, subprocess timeouts, terminal cleanup, and bounded
-audit state. Runner state includes phase heartbeats with `phase`,
+audit state. Runner state and terminal results include daemon source identity:
+`runner_host_commit`, `runner_started_at`, `runner_instance_id`, `runner_pid`,
+supported request/evidence schema versions, deployed-source match, and
+stale-reason evidence. A request whose expected commit or evidence schema does
+not match the loaded daemon terminalizes before evidence collection or artifact
+persistence. Deployments reload the launchd-managed `.85` recurring bridge
+daemon after bridge code changes and attest the refreshed commit/schema before
+accepting the deploy as complete. Runner state includes phase heartbeats with `phase`,
 `phase_started_at`, `phase_updated_at`, `heartbeat_at`, active invocation,
 runner ownership, and `processed/total` progress where known. Polling remains
 local-file only for up to 10 minutes while daemon heartbeat is fresh and
 ownership is stable; fail early only on terminal failure, stale heartbeat,
-ownership change, or hard deadline. Only `.85` enables the bridge with
+ownership change, stale source/schema identity, or hard deadline. Only `.85` enables the bridge with
 `MEMORY_STARGRAPH_RECURRING_BRIDGE_ENABLED=1`, normally through launchd label
 `com.tony.memory-stargraph.recurring-worker-bridge` using the tracked
 `scripts/automation/com.tony.memory-stargraph.recurring-worker-bridge.plist`.

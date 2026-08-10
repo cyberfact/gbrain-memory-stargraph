@@ -9,6 +9,7 @@ commit="${2:-HEAD}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 config_file="${MEMORY_STARGRAPH_AUTOMATION_CONFIG:-${CODEX_HOME:-$HOME/.codex}/automations/memory-stargraph-wish-to-reallity/deployment-targets.env}"
 alert_monitor="$repo_root/scripts/automation/memory_stargraph_alert_monitor.py"
+recurring_bridge_label="${MEMORY_STARGRAPH_RECURRING_BRIDGE_LAUNCHD_LABEL:-com.tony.memory-stargraph.recurring-worker-bridge}"
 
 if [[ ! -f "$config_file" ]]; then
   echo "missing local deployment config: $config_file" >&2
@@ -83,6 +84,57 @@ verify_url() {
   rm -f "$app_tmp"
 }
 
+verify_recurring_bridge_identity() {
+  local expected_commit="$1"
+  local expected_schema="${2:-memory-stargraph-sre-numeric-evidence-v1}"
+  local output
+  output="$(python3 "$repo_root/scripts/automation/recurring_worker_bridge.py" health --json)"
+  printf '%s\n' "$output"
+  python3 - "$expected_commit" "$expected_schema" "$output" <<'PY'
+import json
+import sys
+
+expected_commit, expected_schema, raw = sys.argv[1], sys.argv[2], sys.argv[3]
+payload = json.loads(raw)
+state_identity = ((payload.get("daemon_state") or {}).get("runner_identity") or {})
+identity = state_identity or payload.get("runner_identity") or {}
+if identity.get("runner_host_commit") != expected_commit:
+    raise SystemExit(f"recurring bridge commit mismatch: {identity.get('runner_host_commit')} != {expected_commit}")
+schemas = set(identity.get("supported_evidence_schemas") or [])
+if expected_schema not in schemas:
+    raise SystemExit(f"recurring bridge does not support expected schema: {expected_schema}")
+if identity.get("stale_runner"):
+    raise SystemExit(f"recurring bridge stale: {identity.get('stale_reason')}")
+daemon_state = payload.get("daemon_state") or {}
+if daemon_state.get("runner_enabled") is not True:
+    raise SystemExit("recurring bridge daemon is not enabled on authoritative host")
+if daemon_state.get("runner_host_role") != ".85-authoritative":
+    raise SystemExit(f"unexpected bridge host role: {daemon_state.get('runner_host_role')}")
+PY
+}
+
+reload_recurring_bridge_if_present() {
+  if ! launchctl print "gui/$(id -u)/$recurring_bridge_label" >/dev/null 2>&1; then
+    echo "recurring bridge launchd label not loaded; skipping reload: $recurring_bridge_label"
+    return 0
+  fi
+  echo "reload recurring bridge daemon: $recurring_bridge_label"
+  launchctl kickstart -k "gui/$(id -u)/$recurring_bridge_label"
+  for _ in {1..30}; do
+    if verify_recurring_bridge_identity "$commit" >/tmp/memory-stargraph-recurring-bridge-verify.json 2>/tmp/memory-stargraph-recurring-bridge-verify.err; then
+      cat /tmp/memory-stargraph-recurring-bridge-verify.json
+      rm -f /tmp/memory-stargraph-recurring-bridge-verify.json /tmp/memory-stargraph-recurring-bridge-verify.err
+      return 0
+    fi
+    sleep 2
+  done
+  cat /tmp/memory-stargraph-recurring-bridge-verify.json 2>/dev/null || true
+  cat /tmp/memory-stargraph-recurring-bridge-verify.err 2>/dev/null || true
+  rm -f /tmp/memory-stargraph-recurring-bridge-verify.json /tmp/memory-stargraph-recurring-bridge-verify.err
+  echo "recurring bridge identity did not reach expected commit/schema" >&2
+  return 1
+}
+
 echo "== local dashboard-managed service =="
 for path in "${tracked_files[@]}"; do
   mkdir -p "$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR/$(dirname "$path")"
@@ -106,6 +158,7 @@ local_pid="$(lsof -nP -iTCP:"$local_port" -sTCP:LISTEN -t | head -1 || true)"
 if [[ -n "$local_pid" ]]; then
   lsof -a -p "$local_pid" -d cwd -Fn | grep -F "n$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR"
 fi
+reload_recurring_bridge_if_present
 
 for target in $MEMORY_STARGRAPH_DEPLOY_TARGETS; do
   prefix="MEMORY_STARGRAPH_TARGET_${target}"
