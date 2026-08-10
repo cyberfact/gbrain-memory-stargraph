@@ -128,6 +128,7 @@ YODA_SETTINGS_PATH = DATA_DIR / "yoda_settings.json"
 RESOLVER_EVENTS_PATH = DATA_DIR / "resolver_dispatch_events.json"
 RESOLVER_PROPOSALS_PATH = DATA_DIR / "resolver_proposals.json"
 RESOLVER_DREAM_LOG_PATH = DATA_DIR / "resolver_dream_runs.json"
+DEPLOYMENT_ATTESTATIONS_PATH = DATA_DIR / "deployment_attestations.json"
 GBRAIN = Path(str(CONFIG["gbrain_path"])).expanduser()
 MAX_LIST_PAGES = int(CONFIG["max_list_pages"])
 GRAPH_DEPTH = int(CONFIG["graph_depth"])
@@ -173,7 +174,8 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.190"
+UI_VERSION = "V1.0.191"
+DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -482,12 +484,19 @@ def write_json_file(path, data):
 
 
 SECRET_RE = re.compile(r"(?i)(\bsk-[a-z0-9_-]+|token[=:]\s*\S+|api[_-]?key[=:]\s*\S+|password[=:]\s*\S+)")
+PRIVATE_PATH_RE = re.compile(r"(?i)(/Users/[^\s,'\"\]]+|/private/[^\s,'\"\]]+|/var/folders/[^\s,'\"\]]+|/usr/local/[^\s,'\"\]]+|/opt/homebrew/[^\s,'\"\]]+)")
 
 
 def sanitize_text_summary(value, limit=220):
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     text = SECRET_RE.sub("[redacted]", text)
     text = text.rstrip("?!")
+    return text[:limit]
+
+
+def sanitize_runtime_error(value, limit=220):
+    text = sanitize_text_summary(value, limit * 2)
+    text = PRIVATE_PATH_RE.sub("[redacted-path]", text)
     return text[:limit]
 
 
@@ -5810,16 +5819,156 @@ def readiness_check(check_id, label, status, summary, evidence_slugs=None, fresh
     }
 
 
+def parse_iso_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def safe_evidence_slug(value):
+    slug = str(value or "").strip()
+    if not slug:
+        return ""
+    lowered = slug.lower()
+    if any(token in lowered for token in ("api_key", "authorization", "sk-", "/users/", "://", "\\")):
+        return ""
+    if slug.startswith(("/", "runs/", "reports/", "notes/", "learnings/", "goals/", "products/")):
+        return slug[:240]
+    return ""
+
+
+def current_source_commit():
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def read_deployment_attestation():
+    readback_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if not DEPLOYMENT_ATTESTATIONS_PATH.exists():
+        return {
+            "status": "no_activity",
+            "freshness": "no_activity",
+            "summary": "No durable deployment attestation has been recorded for configured targets.",
+            "readback_at": readback_at,
+            "evidence_slugs": [],
+            "counts": {
+                "configured_target_count": 0,
+                "verified_target_count": 0,
+                "stale_target_count": 0,
+                "missing_target_count": 0,
+                "source_mismatch_count": 0,
+            },
+            "local": {"status": "no_activity"},
+            "configured_remote": {"status": "no_activity", "configured_target_count": 0, "verified_target_count": 0},
+        }
+    try:
+        payload = json.loads(DEPLOYMENT_ATTESTATIONS_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {
+            "status": "missing",
+            "freshness": "missing",
+            "summary": "Durable deployment attestation exists but could not be parsed.",
+            "readback_at": readback_at,
+            "evidence_slugs": [],
+            "counts": {
+                "configured_target_count": 0,
+                "verified_target_count": 0,
+                "stale_target_count": 0,
+                "missing_target_count": 1,
+                "source_mismatch_count": 0,
+            },
+            "local": {"status": "missing"},
+            "configured_remote": {"status": "missing", "configured_target_count": 0, "verified_target_count": 0},
+        }
+    if not isinstance(payload, dict):
+        payload = {}
+    observed_at = str(payload.get("generated_at") or payload.get("observed_at") or "").strip()
+    parsed_observed = parse_iso_timestamp(observed_at)
+    age_seconds = None
+    stale = False
+    if parsed_observed:
+        age_seconds = max(0, int((datetime.now(timezone.utc) - parsed_observed).total_seconds()))
+        stale = age_seconds > DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS
+    else:
+        stale = True
+    version_mismatch = bool(payload.get("ui_version") and str(payload.get("ui_version")) != UI_VERSION)
+    attested_commit = str(payload.get("source_commit") or "").strip()
+    live_commit = current_source_commit()
+    source_mismatch = bool(attested_commit and live_commit and attested_commit != live_commit)
+    configured = payload.get("configured_remote") if isinstance(payload.get("configured_remote"), dict) else {}
+    local = payload.get("local") if isinstance(payload.get("local"), dict) else {}
+    configured_count = parse_nonnegative_int(configured.get("configured_target_count"), 0)
+    verified_count = parse_nonnegative_int(configured.get("verified_target_count"), 0)
+    missing_count = max(0, configured_count - verified_count)
+    local_verified = bool(local.get("verified"))
+    evidence_slugs = [slug for slug in (safe_evidence_slug(item) for item in payload.get("evidence_slugs") or []) if slug]
+    if configured_count <= 0:
+        status = "no_activity"
+        summary = "No configured remote deployment target attestation is present; local deployment evidence is tracked separately."
+    elif source_mismatch or version_mismatch:
+        status = "source_mismatch"
+        summary = "Durable configured-target attestation does not match the currently served source or UI version."
+    elif stale:
+        status = "stale"
+        summary = "Durable configured-target attestation is stale or lacks a parseable source timestamp."
+    elif missing_count:
+        status = "partial"
+        summary = "Some configured targets lack current durable deployment attestation."
+    else:
+        status = "ready"
+        summary = "Configured targets have current durable deployment attestation."
+    freshness = "current" if status == "ready" else status
+    return {
+        "status": status,
+        "freshness": freshness,
+        "summary": summary,
+        "source_timestamp": observed_at,
+        "readback_at": readback_at,
+        "evidence_slugs": evidence_slugs,
+        "counts": {
+            "configured_target_count": configured_count,
+            "verified_target_count": verified_count,
+            "stale_target_count": configured_count if status == "stale" else 0,
+            "missing_target_count": missing_count,
+            "source_mismatch_count": configured_count if status == "source_mismatch" else 0,
+            "local_attestation_present": 1 if local_verified else 0,
+        },
+        "local": {
+            "status": "current" if local_verified and not stale and not source_mismatch and not version_mismatch else ("stale" if stale else ("source_mismatch" if source_mismatch or version_mismatch else "no_activity")),
+            "verified": local_verified,
+            "source_timestamp": str(local.get("observed_at") or observed_at or ""),
+        },
+        "configured_remote": {
+            "status": status,
+            "configured_target_count": configured_count,
+            "verified_target_count": verified_count,
+            "source_timestamp": observed_at,
+        },
+    }
+
+
 def configured_target_readiness():
-    target_count = 0
-    if os.environ.get("MEMORY_STARGRAPH_DEPLOY_TARGETS"):
-        target_count = len([target for target in os.environ["MEMORY_STARGRAPH_DEPLOY_TARGETS"].split() if target.strip()])
-    configured_urls = os.environ.get("MEMORY_STARGRAPH_REMOTE_HEALTH_URLS") or os.environ.get("MEMORY_STARGRAPH_MONITOR_TARGETS")
-    if configured_urls:
-        target_count = max(target_count, len([item for item in configured_urls.split() if item.strip()]))
-    if target_count:
-        return "ready", {"configured_target_count": target_count}, "Configured remote target evidence is available from deployment configuration."
-    return "no_activity", {"configured_target_count": 0}, "No in-process configured-target evidence is exposed to this read-only endpoint."
+    attestation = read_deployment_attestation()
+    return attestation["status"], attestation, attestation["summary"]
 
 
 def customer_readiness():
@@ -5954,13 +6103,13 @@ def customer_readiness():
             "Configured targets",
             target_status,
             target_summary,
-            ["docs/automation-runbook.md"],
-            freshness="current" if target_status == "ready" else "no_activity",
+            target_counts.get("evidence_slugs") or ["docs/automation-runbook.md"],
+            freshness=target_counts.get("freshness") or ("current" if target_status == "ready" else "no_activity"),
             next_step="Run the deployment verification contract before presenting this instance as multi-target ready.",
         ),
     ]
     blocked = [check for check in checks if check["status"] in {"blocked", "missing"}]
-    degraded = [check for check in checks if check["status"] in {"degraded", "partial", "stale", "no_activity"}]
+    degraded = [check for check in checks if check["status"] in {"degraded", "partial", "stale", "source_mismatch", "no_activity"}]
     overall_status = "blocked" if blocked else ("degraded" if degraded else "ready")
     if blocked or degraded:
         first_attention = (blocked or degraded)[0]
@@ -5998,6 +6147,8 @@ def customer_readiness():
             "blocked": sum(1 for check in checks if check["status"] == "blocked"),
             "missing": sum(1 for check in checks if check["status"] == "missing"),
             "partial": sum(1 for check in checks if check["status"] == "partial"),
+            "stale": sum(1 for check in checks if check["status"] == "stale"),
+            "source_mismatch": sum(1 for check in checks if check["status"] == "source_mismatch"),
             "no_activity": sum(1 for check in checks if check["status"] == "no_activity"),
         },
         "checks": checks,
@@ -6332,6 +6483,7 @@ def verified_memory_outcomes(window, backlog, resolver_health):
     row_markdown_cache["notes/memory-starmap-todo-list"] = backlog
     blocker_classification = classify_todo_blockers(backlog, row_markdown_cache)
     sre_numeric = latest_sre_numeric_evidence()
+    deployment_attestation = read_deployment_attestation()
 
     retrieval_passed = evidence["retrieval_quality"]["available"] and (
         ("10/10" in retrieval_text or "answer_success_count=10" in retrieval_text)
@@ -6430,10 +6582,20 @@ def verified_memory_outcomes(window, backlog, resolver_health):
             summary=sre_numeric["summary"],
             freshness=sre_numeric["freshness"],
         ),
+        outcome_gate(
+            "configured_target_deployment_attestation",
+            "Configured-target deployment attestation",
+            "pass" if deployment_attestation["status"] == "ready" else deployment_attestation["status"],
+            [outcome_evidence(slug, "available") for slug in deployment_attestation["evidence_slugs"]],
+            passed=deployment_attestation["status"] == "ready",
+            counts=deployment_attestation["counts"],
+            summary=deployment_attestation["summary"],
+            freshness=deployment_attestation["freshness"],
+        ),
     ]
     passed = sum(1 for gate in gates if gate["passed"])
     missing = sum(1 for gate in gates if gate["status"] == "missing")
-    degraded = sum(1 for gate in gates if gate["status"] == "degraded")
+    degraded = sum(1 for gate in gates if gate["status"] in {"degraded", "stale", "source_mismatch"})
     aggregate_status = "pass" if passed == len(gates) else ("partial" if missing else ("degraded" if degraded else "partial"))
     return {
         "schema_version": 1,
@@ -6461,6 +6623,16 @@ def verified_memory_outcomes(window, backlog, resolver_health):
             "evidence_slugs": [item["slug"] for item in sre_numeric["evidence"] if item.get("available")],
             "counts": sre_numeric["counts"],
         },
+        "deployment_attestation": {
+            "status": deployment_attestation["status"],
+            "freshness": deployment_attestation["freshness"],
+            "source_timestamp": deployment_attestation.get("source_timestamp", ""),
+            "readback_at": deployment_attestation.get("readback_at", ""),
+            "evidence_slugs": deployment_attestation["evidence_slugs"],
+            "counts": deployment_attestation["counts"],
+            "local": deployment_attestation["local"],
+            "configured_remote": deployment_attestation["configured_remote"],
+        },
         "resolver_choice": {
             "status": "observed" if isinstance(resolver_health, dict) and not resolver_health.get("error") else "unknown",
             "pending_proposals": parse_nonnegative_int((resolver_health or {}).get("pending", 0) if isinstance(resolver_health, dict) else 0),
@@ -6481,7 +6653,7 @@ def memory_value_digest(window="day"):
     try:
         resolver_health = resolver_feedback_health()
     except Exception as exc:  # noqa: BLE001
-        resolver_health = {"error": str(exc)}
+        resolver_health = {"error": sanitize_runtime_error(exc)}
     learned_items = []
     if "source-sync" in learnings.lower() or "source sync" in learnings.lower():
         learned_items.append("Source-sync preflight is now treated as worker runtime evidence, not only deployment evidence.")

@@ -150,6 +150,27 @@ class FakeStore:
         }
 
 
+def ready_deployment_attestation():
+    return {
+        "status": "ready",
+        "freshness": "current",
+        "summary": "Configured targets have current durable deployment attestation.",
+        "source_timestamp": "2026-08-10T10:00:00Z",
+        "readback_at": "2026-08-10T10:05:00Z",
+        "evidence_slugs": ["runs/memory-stargraph-wish-sg0199-test"],
+        "counts": {
+            "configured_target_count": 1,
+            "verified_target_count": 1,
+            "stale_target_count": 0,
+            "missing_target_count": 0,
+            "source_mismatch_count": 0,
+            "local_attestation_present": 1,
+        },
+        "local": {"status": "current", "verified": True, "source_timestamp": "2026-08-10T10:00:00Z"},
+        "configured_remote": {"status": "ready", "configured_target_count": 1, "verified_target_count": 1, "source_timestamp": "2026-08-10T10:00:00Z"},
+    }
+
+
 class SingleRowTakeStore(FakeStore):
     def list_takes(self, filters=None):
         self.calls.append(("list_takes", dict(filters or {})))
@@ -1021,6 +1042,7 @@ class ApiEndpointTests(unittest.TestCase):
                     "summary": "Numeric SRE capacity, backup freshness, restore rehearsal, and 7-day/30-day baseline evidence is present.",
                 },
             ),
+            mock.patch("server.read_deployment_attestation", return_value=ready_deployment_attestation()),
             mock.patch("server.datetime", FixedDateTime),
         ):
             status, data = self.dispatch_get("/api/memory-value-digest?window=week")
@@ -1032,14 +1054,16 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(outcomes["window"], "week")
         self.assertIn("weekly_deltas", outcomes)
         self.assertEqual(outcomes["weekly_deltas"]["completed"], 3)
-        self.assertEqual(outcomes["summary_counts"]["gates_total"], 8)
-        self.assertEqual(outcomes["summary_counts"]["gates_passed"], 8)
+        self.assertEqual(outcomes["summary_counts"]["gates_total"], 9)
+        self.assertEqual(outcomes["summary_counts"]["gates_passed"], 9)
         gates = {gate["key"]: gate for gate in outcomes["gates"]}
         self.assertEqual(gates["retrieval_quality_benchmark"]["status"], "pass")
         self.assertEqual(gates["natural_language_search_parity"]["status"], "pass")
         self.assertEqual(gates["contradiction_pruning"]["status"], "pass")
         self.assertEqual(gates["unresolved_blockers"]["status"], "pass")
         self.assertEqual(gates["sre_capacity_backup_restore"]["status"], "pass")
+        self.assertEqual(gates["configured_target_deployment_attestation"]["status"], "pass")
+        self.assertEqual(gates["configured_target_deployment_attestation"]["counts"]["configured_target_count"], 1)
         self.assertEqual(gates["unresolved_blockers"]["counts"]["current_unresolved"], 0)
         self.assertEqual(gates["unresolved_blockers"]["counts"]["historical_failed"], 1)
         self.assertEqual(gates["unresolved_blockers"]["counts"]["superseded_failed"], 1)
@@ -1053,6 +1077,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("/users/", serialized)
         self.assertNotIn("raw prompt", serialized)
         self.assertFalse(outcomes["resolver_choice"]["auto_approval"])
+        self.assertEqual(outcomes["deployment_attestation"]["configured_remote"]["verified_target_count"], 1)
 
     def test_weekly_memory_value_digest_marks_missing_evidence_partial(self):
         fake_store = FakeStore()
@@ -1080,6 +1105,15 @@ class ApiEndpointTests(unittest.TestCase):
                     "summary": "Numeric SRE evidence missing.",
                 },
             ),
+            mock.patch("server.read_deployment_attestation", return_value={
+                **ready_deployment_attestation(),
+                "status": "no_activity",
+                "freshness": "no_activity",
+                "summary": "No durable deployment attestation.",
+                "evidence_slugs": [],
+                "counts": {"configured_target_count": 0, "verified_target_count": 0, "stale_target_count": 0, "missing_target_count": 0, "source_mismatch_count": 0},
+                "configured_remote": {"status": "no_activity", "configured_target_count": 0, "verified_target_count": 0},
+            }),
         ):
             status, data = self.dispatch_get("/api/memory-value-digest?window=week")
 
@@ -1091,6 +1125,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(gates["retrieval_quality_benchmark"]["status"], "missing")
         self.assertEqual(gates["worker_learnings"]["status"], "missing")
         self.assertEqual(gates["sre_capacity_backup_restore"]["status"], "missing")
+        self.assertEqual(gates["configured_target_deployment_attestation"]["status"], "no_activity")
         self.assertEqual(gates["unresolved_blockers"]["status"], "degraded")
         self.assertFalse(gates["retrieval_quality_benchmark"]["passed"])
         self.assertEqual(gates["retrieval_quality_benchmark"]["evidence_slugs"], [])
@@ -1168,6 +1203,7 @@ class ApiEndpointTests(unittest.TestCase):
                         "summary": "Numeric SRE evidence present.",
                     },
                 ),
+                mock.patch("server.read_deployment_attestation", return_value=ready_deployment_attestation()),
             ):
                 status, data = self.dispatch_get("/api/memory-value-digest?window=week")
 
@@ -1279,6 +1315,97 @@ class ApiEndpointTests(unittest.TestCase):
         serialized = json.dumps(data).lower()
         self.assertNotIn("redacted failure", serialized)
         self.assertNotIn("/users/", serialized)
+
+    def test_deployment_attestation_reports_current_stale_missing_and_source_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "deployment_attestations.json"
+            current_payload = {
+                "schema_version": 1,
+                "generated_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "ui_version": server.UI_VERSION,
+                "source_commit": "abc123",
+                "evidence_slugs": [
+                    "runs/memory-stargraph-wish-sg0199-test",
+                    "https://private.example.invalid/should-not-leak",
+                    "/Users/toddy/secret",
+                ],
+                "local": {"verified": True, "observed_at": "2026-08-10T10:00:00Z"},
+                "configured_remote": {"configured_target_count": 2, "verified_target_count": 2},
+            }
+            with (
+                mock.patch("server.DEPLOYMENT_ATTESTATIONS_PATH", path),
+                mock.patch("server.current_source_commit", return_value="abc123"),
+            ):
+                path.write_text(json.dumps(current_payload), encoding="utf-8")
+                current = server.read_deployment_attestation()
+                self.assertEqual(current["status"], "ready")
+                self.assertEqual(current["counts"]["configured_target_count"], 2)
+                self.assertEqual(current["counts"]["verified_target_count"], 2)
+                self.assertEqual(current["local"]["status"], "current")
+                self.assertEqual(current["evidence_slugs"], ["runs/memory-stargraph-wish-sg0199-test"])
+
+                stale_payload = dict(current_payload)
+                stale_payload["generated_at"] = "2026-01-01T00:00:00Z"
+                path.write_text(json.dumps(stale_payload), encoding="utf-8")
+                stale = server.read_deployment_attestation()
+                self.assertEqual(stale["status"], "stale")
+                self.assertEqual(stale["counts"]["stale_target_count"], 2)
+
+                mismatch_payload = dict(current_payload)
+                mismatch_payload["source_commit"] = "def456"
+                path.write_text(json.dumps(mismatch_payload), encoding="utf-8")
+                mismatch = server.read_deployment_attestation()
+                self.assertEqual(mismatch["status"], "source_mismatch")
+                self.assertEqual(mismatch["counts"]["source_mismatch_count"], 2)
+
+                partial_payload = dict(current_payload)
+                partial_payload["configured_remote"] = {"configured_target_count": 2, "verified_target_count": 1}
+                path.write_text(json.dumps(partial_payload), encoding="utf-8")
+                partial = server.read_deployment_attestation()
+                self.assertEqual(partial["status"], "partial")
+                self.assertEqual(partial["counts"]["missing_target_count"], 1)
+                serialized = json.dumps(partial).lower()
+                self.assertNotIn("private.example", serialized)
+                self.assertNotIn("/users/", serialized)
+
+                path.write_text("{not-json", encoding="utf-8")
+                malformed = server.read_deployment_attestation()
+                self.assertEqual(malformed["status"], "missing")
+                self.assertEqual(malformed["counts"]["missing_target_count"], 1)
+
+                path.unlink()
+                missing = server.read_deployment_attestation()
+                self.assertEqual(missing["status"], "no_activity")
+                self.assertEqual(missing["configured_remote"]["configured_target_count"], 0)
+
+    def test_memory_value_digest_redacts_resolver_runtime_paths(self):
+        fake_store = FakeStore()
+
+        def fake_gbrain(command, slug, **_kwargs):
+            self.assertEqual(command, "get")
+            if slug == "notes/memory-starmap-todo-list":
+                return "| SG-0199 | implementing | P1 | Current work | [[notes/current]] | 2026-08-10 | Implementing. |"
+            if slug == "learnings/memory-stargraph-20260719-operational-state-reconciliation-and-source-sync-preflight":
+                return "# Learning\n\nOperational source-sync preflight evidence."
+            raise RuntimeError(f"missing {slug}")
+
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.run_gbrain", side_effect=fake_gbrain),
+            mock.patch(
+                "server.resolver_feedback_health",
+                side_effect=TimeoutError("Command '['/Users/toddy/.bun/bin/gbrain', 'call', 'resolver_feedback_health', '{}']' timed out after 20 seconds"),
+            ),
+        ):
+            status, data = self.dispatch_get("/api/memory-value-digest?window=day")
+
+        self.assertEqual(status, 200)
+        self.assertIn("error", data["resolver_health"])
+        serialized = json.dumps(data).lower()
+        self.assertIn("[redacted-path]", serialized)
+        self.assertNotIn("/users/", serialized)
+        self.assertNotIn("api_key", serialized)
+        self.assertNotIn("authorization", serialized)
 
     def test_take_proposals_endpoint_bounds_filters_and_returns_counts(self):
         fake_store = FakeStore()

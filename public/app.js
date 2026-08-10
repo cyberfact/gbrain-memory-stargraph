@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.190";
+const UI_VERSION = "V1.0.191";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -4171,6 +4171,16 @@ function renderCustomerReadinessCard(data) {
     grid.appendChild(item);
   });
   card.appendChild(grid);
+
+  if (data?.target_evidence) {
+    const targetEvidence = data.target_evidence;
+    const configured = targetEvidence.configured_remote || {};
+    const local = targetEvidence.local || {};
+    const targets = document.createElement("p");
+    targets.className = "customer-readiness-privacy";
+    targets.textContent = `Configured targets: ${configured.verified_target_count ?? 0}/${configured.configured_target_count ?? 0} attested · ${outcomeStatusLabel(configured.status || targetEvidence.status)} · local ${outcomeStatusLabel(local.status)}`;
+    card.appendChild(targets);
+  }
 
   const next = document.createElement("p");
   next.className = "customer-readiness-next-step";

@@ -30,6 +30,7 @@ MEMORY_STARGRAPH_DASHBOARD_RESTART_URL="${MEMORY_STARGRAPH_DASHBOARD_RESTART_URL
 MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND="${MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND:-}"
 MEMORY_STARGRAPH_LOCAL_CURL_FLAGS="${MEMORY_STARGRAPH_LOCAL_CURL_FLAGS:-}"
 MEMORY_STARGRAPH_DEPLOY_TARGETS="${MEMORY_STARGRAPH_DEPLOY_TARGETS:-}"
+MEMORY_STARGRAPH_DEPLOY_EVIDENCE_SLUGS="${MEMORY_STARGRAPH_DEPLOY_EVIDENCE_SLUGS:-}"
 if [[ -z "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL" && -z "$MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND" ]]; then
   echo "missing MEMORY_STARGRAPH_DASHBOARD_RESTART_URL or MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND" >&2
   exit 2
@@ -84,6 +85,24 @@ verify_url() {
   rm -f "$app_tmp"
 }
 
+verify_url_with_retries() {
+  local base="$1"
+  local curl_flags="${2:-}"
+  local attempts="${3:-12}"
+  local delay_seconds="${4:-5}"
+  local attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if verify_url "$base" "$curl_flags"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      echo "verify retry $attempt/$attempts: target not ready yet"
+      sleep "$delay_seconds"
+    fi
+  done
+  return 1
+}
+
 verify_recurring_bridge_identity() {
   local expected_commit="$1"
   local expected_schema="${2:-memory-stargraph-sre-numeric-evidence-v1}"
@@ -135,6 +154,50 @@ reload_recurring_bridge_if_present() {
   return 1
 }
 
+write_deployment_attestation() {
+  local service_dir="$1"
+  local local_verified_at="$2"
+  local configured_count="$3"
+  local verified_count="$4"
+  python3 - "$service_dir" "$version" "$commit" "$local_verified_at" "$configured_count" "$verified_count" "$MEMORY_STARGRAPH_DEPLOY_EVIDENCE_SLUGS" <<'PY'
+import datetime as dt
+import json
+import pathlib
+import sys
+
+service_dir, version, commit, local_verified_at, configured_count, verified_count, evidence_raw = sys.argv[1:8]
+now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+evidence_slugs = [
+    item.strip()
+    for item in evidence_raw.split()
+    if item.strip().startswith(("runs/", "reports/", "notes/", "learnings/", "goals/", "products/"))
+]
+payload = {
+    "schema_version": 1,
+    "generated_at": now,
+    "ui_version": version,
+    "source_commit": commit,
+    "privacy": "Sanitized deployment attestation: aggregate counts and evidence slugs only; hostnames, IPs, credentials, paths, and target coordinates are withheld.",
+    "evidence_slugs": evidence_slugs,
+    "local": {
+        "verified": bool(local_verified_at),
+        "observed_at": local_verified_at or now,
+        "status": "current" if local_verified_at else "missing",
+    },
+    "configured_remote": {
+        "configured_target_count": int(configured_count or 0),
+        "verified_target_count": int(verified_count or 0),
+        "status": "current" if int(configured_count or 0) and int(configured_count or 0) == int(verified_count or 0) else ("no_activity" if int(configured_count or 0) == 0 else "partial"),
+        "observed_at": now,
+    },
+}
+target = pathlib.Path(service_dir) / "data" / "deployment_attestations.json"
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(f"deployment attestation written: {target}")
+PY
+}
+
 echo "== local dashboard-managed service =="
 for path in "${tracked_files[@]}"; do
   mkdir -p "$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR/$(dirname "$path")"
@@ -151,7 +214,8 @@ else
   sh -c "$MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND"
 fi
 sleep 4
-verify_url "$MEMORY_STARGRAPH_LOCAL_URL" "$MEMORY_STARGRAPH_LOCAL_CURL_FLAGS"
+verify_url_with_retries "$MEMORY_STARGRAPH_LOCAL_URL" "$MEMORY_STARGRAPH_LOCAL_CURL_FLAGS" 6 3
+local_verified_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 local_port="${MEMORY_STARGRAPH_LOCAL_URL##*:}"
 local_port="${local_port%%/*}"
 local_pid="$(lsof -nP -iTCP:"$local_port" -sTCP:LISTEN -t | head -1 || true)"
@@ -160,6 +224,10 @@ if [[ -n "$local_pid" ]]; then
 fi
 reload_recurring_bridge_if_present
 
+configured_target_count=0
+verified_target_count=0
+verified_remote_repos=()
+verified_remote_hosts=()
 for target in $MEMORY_STARGRAPH_DEPLOY_TARGETS; do
   prefix="MEMORY_STARGRAPH_TARGET_${target}"
   name_var="${prefix}_NAME"
@@ -178,6 +246,7 @@ for target in $MEMORY_STARGRAPH_DEPLOY_TARGETS; do
   curl_flags="${!curl_flags_var:-}"
 
   echo "== remote target: $name =="
+  configured_target_count=$((configured_target_count + 1))
   ssh -o BatchMode=yes -o ConnectTimeout=10 "$ssh_host" "
     set -e
     cd '$remote_repo'
@@ -191,8 +260,65 @@ for target in $MEMORY_STARGRAPH_DEPLOY_TARGETS; do
     sleep 5
   "
   for url in $verify_urls; do
-    verify_url "$url" "$curl_flags"
+    verify_url_with_retries "$url" "$curl_flags" 18 5
   done
+  verified_target_count=$((verified_target_count + 1))
+  verified_remote_hosts+=("$ssh_host")
+  verified_remote_repos+=("$remote_repo")
+done
+
+write_deployment_attestation "$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR" "$local_verified_at" "$configured_target_count" "$verified_target_count"
+for index in "${!verified_remote_hosts[@]}"; do
+  ssh_host="${verified_remote_hosts[$index]}"
+  remote_repo="${verified_remote_repos[$index]}"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$ssh_host" "
+    set -e
+    cd '$remote_repo'
+    MEMORY_STARGRAPH_ATTEST_VERSION='$version' \
+    MEMORY_STARGRAPH_ATTEST_COMMIT='$commit' \
+    MEMORY_STARGRAPH_ATTEST_LOCAL_VERIFIED_AT='$local_verified_at' \
+    MEMORY_STARGRAPH_ATTEST_CONFIGURED_COUNT='$configured_target_count' \
+    MEMORY_STARGRAPH_ATTEST_VERIFIED_COUNT='$verified_target_count' \
+    MEMORY_STARGRAPH_ATTEST_EVIDENCE_SLUGS='$MEMORY_STARGRAPH_DEPLOY_EVIDENCE_SLUGS' \
+    python3 - <<'PY'
+import datetime as dt
+import json
+import os
+import pathlib
+
+now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+configured_count = int(os.environ.get('MEMORY_STARGRAPH_ATTEST_CONFIGURED_COUNT') or 0)
+verified_count = int(os.environ.get('MEMORY_STARGRAPH_ATTEST_VERIFIED_COUNT') or 0)
+evidence_slugs = [
+    item.strip()
+    for item in os.environ.get('MEMORY_STARGRAPH_ATTEST_EVIDENCE_SLUGS', '').split()
+    if item.strip().startswith(('runs/', 'reports/', 'notes/', 'learnings/', 'goals/', 'products/'))
+]
+payload = {
+    'schema_version': 1,
+    'generated_at': now,
+    'ui_version': os.environ.get('MEMORY_STARGRAPH_ATTEST_VERSION', ''),
+    'source_commit': os.environ.get('MEMORY_STARGRAPH_ATTEST_COMMIT', ''),
+    'privacy': 'Sanitized deployment attestation: aggregate counts and evidence slugs only; hostnames, IPs, credentials, paths, and target coordinates are withheld.',
+    'evidence_slugs': evidence_slugs,
+    'local': {
+        'verified': True,
+        'observed_at': os.environ.get('MEMORY_STARGRAPH_ATTEST_LOCAL_VERIFIED_AT') or now,
+        'status': 'current',
+    },
+    'configured_remote': {
+        'configured_target_count': configured_count,
+        'verified_target_count': verified_count,
+        'status': 'current' if configured_count and configured_count == verified_count else ('no_activity' if configured_count == 0 else 'partial'),
+        'observed_at': now,
+    },
+}
+target = pathlib.Path('data') / 'deployment_attestations.json'
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n', encoding='utf-8')
+print(f'deployment attestation written: {target}')
+PY
+  "
 done
 
 if [[ -f "$alert_monitor" ]]; then

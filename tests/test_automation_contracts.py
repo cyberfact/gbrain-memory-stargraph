@@ -181,9 +181,17 @@ class AutomationContractTests(unittest.TestCase):
             'MEMORY_STARGRAPH_DEPLOY_TARGETS="${MEMORY_STARGRAPH_DEPLOY_TARGETS:-}"',
             deploy,
         )
+        self.assertIn("data\" / \"deployment_attestations.json", deploy)
+        self.assertIn("MEMORY_STARGRAPH_DEPLOY_EVIDENCE_SLUGS", deploy)
+        self.assertIn("configured_target_count", deploy)
+        self.assertIn("verified_target_count", deploy)
+        self.assertIn("source_commit", deploy)
+        self.assertIn("hostnames, IPs, credentials, paths, and target coordinates are withheld", deploy)
+        self.assertNotIn("target.write_text(str(", deploy)
         for phrase in (
             "reload_recurring_bridge_if_present",
             "verify_recurring_bridge_identity",
+            "verify_url_with_retries",
             "com.tony.memory-stargraph.recurring-worker-bridge",
             "memory-stargraph-sre-numeric-evidence-v1",
             "recurring bridge commit mismatch",
