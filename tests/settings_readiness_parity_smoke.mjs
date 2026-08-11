@@ -36,6 +36,24 @@ function outcomeStatusLabel(status) {
 
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, ignoreHTTPSErrors: true });
+const settingsResponses = new Map();
+
+page.on("response", async (response) => {
+  const url = response.url();
+  if (!url.includes("/api/memory-value-digest") && !url.includes("/api/customer-readiness")) return;
+  if (!url.includes("settings_request=")) return;
+  try {
+    const parsed = new URL(url);
+    const requestId = parsed.searchParams.get("settings_request") || "";
+    if (!requestId) return;
+    const kind = parsed.pathname.includes("memory-value-digest") ? "digest" : "readiness";
+    const current = settingsResponses.get(requestId) || {};
+    current[kind] = await response.json();
+    settingsResponses.set(requestId, current);
+  } catch {
+    // Ignore unrelated or malformed responses; the final assertion requires both payloads.
+  }
+});
 
 try {
   await page.goto(appUrl, { waitUntil: "domcontentloaded" });
@@ -52,15 +70,17 @@ try {
         && panel.querySelector(".customer-readiness-card")
     );
   }, null, { timeout: 60000 });
+  const settledRequestId = await page.locator("#settingsEvidenceCards").getAttribute("data-request-id");
+  await page.waitForFunction((requestId) => {
+    const cards = document.querySelector("#settingsEvidenceCards");
+    return Boolean(
+      requestId
+        && cards?.dataset.requestId === requestId
+        && cards.querySelector(".verified-outcomes-card")
+        && cards.querySelector(".customer-readiness-card")
+    );
+  }, settledRequestId, { timeout: 1000 });
 
-  const apiState = await page.evaluate(async () => {
-    const cacheBust = Date.now();
-    const [digest, readiness] = await Promise.all([
-      fetch(`/api/memory-value-digest?window=week&parity_ts=${cacheBust}`).then((response) => response.json()),
-      fetch(`/api/customer-readiness?parity_ts=${cacheBust}`).then((response) => response.json()),
-    ]);
-    return { digest, readiness };
-  });
   const uiState = await page.evaluate(() => {
     const cards = document.querySelector("#settingsEvidenceCards");
     const digestCard = cards?.querySelector(".verified-outcomes-card");
@@ -80,6 +100,10 @@ try {
       refreshButtonVisible: Boolean(cards?.querySelector('button[aria-label="Refresh weekly outcomes and customer readiness"]')?.offsetParent),
     };
   });
+  const apiState = settingsResponses.get(settledRequestId);
+  if (!apiState?.digest || !apiState?.readiness) {
+    throw new Error(`Missing captured Settings API payloads for request ${settledRequestId}`);
+  }
 
   const outcomes = apiState.digest?.verified_memory_outcomes || {};
   const outcomeCounts = outcomes.summary_counts || {};
