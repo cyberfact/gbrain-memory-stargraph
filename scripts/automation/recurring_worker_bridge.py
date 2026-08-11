@@ -891,6 +891,26 @@ def load_bundle(root: Path, values: dict[str, str]) -> dict[str, object]:
     return payload
 
 
+def prepare_persist_bundle_identity(payload: dict[str, object], *, role: str, invocation_id: str, operation: str = "persist") -> dict[str, object]:
+    if role not in ALLOWED_ROLES:
+        raise BridgeError(f"unsupported role: {role}")
+    if operation != "persist":
+        raise BridgeError("bundle operation must be persist")
+    _safe_id(invocation_id)
+    prepared = dict(payload)
+    expected = {
+        "role": role,
+        "invocation_id": invocation_id,
+        "operation": operation,
+    }
+    for key, value in expected.items():
+        existing = prepared.get(key)
+        if existing is not None and existing != value:
+            raise BridgeError(f"bundle {key} mismatch")
+        prepared[key] = value
+    return prepared
+
+
 def validate_artifact(role: str, artifact: dict[str, object], seen_todos: set[str]) -> None:
     slug = artifact.get("slug")
     markdown = artifact.get("markdown")
@@ -1116,6 +1136,9 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("--json", action="store_true")
     bundle = sub.add_parser("write-bundle")
     bundle.add_argument("--filename", required=True)
+    bundle.add_argument("--role", choices=sorted(ALLOWED_ROLES))
+    bundle.add_argument("--invocation-id")
+    bundle.add_argument("--operation", choices=["persist"], default="persist")
     bundle.add_argument("--json", action="store_true")
     run_once = sub.add_parser("run-once")
     run_once.add_argument("--json", action="store_true")
@@ -1138,6 +1161,10 @@ def main(argv: list[str] | None = None) -> int:
             target = _within(root, root / "bundles" / Path(args.filename).name)
             data = sys.stdin.read()
             payload = json.loads(data)
+            if args.role or args.invocation_id:
+                if not args.role or not args.invocation_id:
+                    raise BridgeError("write-bundle identity requires --role and --invocation-id")
+                payload = prepare_persist_bundle_identity(payload, role=args.role, invocation_id=args.invocation_id, operation=args.operation)
             atomic_write_json(target, payload)
             result = {"ok": True, "bundle_file": str(target), "bytes": target.stat().st_size}
         elif args.command == "run-once":

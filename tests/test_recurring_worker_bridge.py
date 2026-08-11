@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import tempfile
@@ -64,6 +65,67 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             request = json.loads(next((root / "incoming").glob("*.json")).read_text(encoding="utf-8"))
             self.assertEqual(request["mode"], "weekly_resilience")
             self.assertEqual(request["expected_evidence_schema"], "memory-stargraph-sre-numeric-evidence-v1")
+
+    def test_write_bundle_stamps_sre_persist_identity_for_daily_and_weekly(self):
+        for mode in ("daily_reliability", "weekly_resilience"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                invocation_id = f"sg0201-{mode.replace('_', '-')}-0001"
+                bundle = {
+                    "decision_type": "report_only",
+                    "artifacts": [
+                        {
+                            "kind": "run",
+                            "slug": f"runs/memory-stargraph-sre-sg0201-{mode.replace('_', '-')}-0001",
+                            "markdown": f"---\nstatus: completed\nmode: {mode}\n---\n# SG-0201 {mode}\n",
+                        }
+                    ],
+                }
+                with mock.patch("sys.stdin", io.StringIO(json.dumps(bundle))):
+                    result = bridge.main([
+                        "--runtime-dir", str(root),
+                        "write-bundle",
+                        "--filename", f"{invocation_id}-decision.json",
+                        "--role", "sre_daily_reliability",
+                        "--invocation-id", invocation_id,
+                        "--json",
+                    ])
+                self.assertEqual(result, 0)
+                written = json.loads((root / "bundles" / f"{invocation_id}-decision.json").read_text(encoding="utf-8"))
+                self.assertEqual(written["role"], "sre_daily_reliability")
+                self.assertEqual(written["invocation_id"], invocation_id)
+                self.assertEqual(written["operation"], "persist")
+                values = bridge.validate_request(self.make_request(
+                    role="sre_daily_reliability",
+                    operation="persist",
+                    invocation_id=invocation_id,
+                    bundle_file=str(root / "bundles" / f"{invocation_id}-decision.json"),
+                ))
+                with mock.patch.object(bridge, "gbrain_put"):
+                    persisted = bridge.persist_decision(root, values)
+                self.assertEqual(persisted["artifact_count"], 1)
+
+    def test_write_bundle_rejects_sre_identity_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = {
+                "role": "daily_learning_intake",
+                "invocation_id": "wrong-invocation-0001",
+                "operation": "evidence",
+                "decision_type": "report_only",
+                "artifacts": [],
+            }
+            with mock.patch("sys.stdin", io.StringIO(json.dumps(bundle))):
+                result = bridge.main([
+                    "--runtime-dir", str(root),
+                    "write-bundle",
+                    "--filename", "sg0201-mismatch-decision.json",
+                    "--role", "sre_daily_reliability",
+                    "--invocation-id", "sg0201-sre-identity-0001",
+                    "--json",
+                ])
+            self.assertEqual(result, 1)
+            self.assertFalse((root / "bundles" / "sg0201-mismatch-decision.json").exists())
 
     def test_learning_evidence_bundle_has_required_slots_and_phase_heartbeat(self):
         with tempfile.TemporaryDirectory() as tmp:
