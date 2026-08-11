@@ -4198,8 +4198,8 @@ function renderCustomerReadinessCard(data) {
 
 let settingsEvidenceRequestId = 0;
 let settingsEvidenceRefreshTimer = null;
-const SETTINGS_DIGEST_TIMEOUT_MS = 12000;
-const SETTINGS_READINESS_TIMEOUT_MS = 30000;
+const SETTINGS_DIGEST_TIMEOUT_MS = 45000;
+const SETTINGS_READINESS_TIMEOUT_MS = 60000;
 const SETTINGS_EVIDENCE_REFRESH_INTERVAL_MS = 15000;
 
 function clearSettingsEvidenceAutoRefresh() {
