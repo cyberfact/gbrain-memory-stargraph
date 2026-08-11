@@ -38,6 +38,8 @@ fi
 
 tracked_files=(
   README.md
+  openclaw_profile_activation.py
+  requirements-dashboard.txt
   server.py
   public/app.js
   public/index.html

@@ -188,6 +188,15 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("verified_target_count", deploy)
         self.assertIn("source_commit", deploy)
         self.assertIn("hostnames, IPs, credentials, paths, and target coordinates are withheld", deploy)
+
+    def test_deployment_packaging_includes_openclaw_activation_runtime(self):
+        deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
+
+        for path in (
+            "openclaw_profile_activation.py",
+            "requirements-dashboard.txt",
+        ):
+            self.assertIn(path, deploy)
         self.assertNotIn("target.write_text(str(", deploy)
         for phrase in (
             "reload_recurring_bridge_if_present",
