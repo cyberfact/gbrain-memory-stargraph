@@ -138,6 +138,7 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
                     "open_files": {"current_process_open_fd_count": bridge.numeric_sample(12, "count")},
                     "bridge_spool": {"incoming_count": bridge.numeric_sample(0, "count")},
                 }),
+                mock.patch.object(bridge, "iso_now", return_value="2026-08-10T09:00:00-07:00"),
             ):
                 evidence = bridge.collect_sre_numeric_evidence(root, values, {"latency_ms": 25})
             self.assertEqual(evidence["schema"], "memory-stargraph-sre-numeric-evidence-v1")

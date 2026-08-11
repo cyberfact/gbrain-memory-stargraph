@@ -172,6 +172,7 @@ class AutomationContractTests(unittest.TestCase):
             "tests/test_source_sync_preflight.py",
             "tests/test_recurring_worker_bridge.py",
             "tests/test_retrieval_quality_benchmark.py",
+            "tests/settings_readiness_parity_smoke.mjs",
         ):
             self.assertIn(path, deploy)
 

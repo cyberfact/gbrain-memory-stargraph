@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.191";
+const UI_VERSION = "V1.0.192";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -1326,6 +1326,8 @@ function setFlyoutOpen(panel, button, open) {
     if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
     syncYodaDepthControl();
     updateCacheSettingsView();
+  } else if (panel === settingsFlyout && !open) {
+    clearSettingsEvidenceAutoRefresh();
   }
   updateNavModeState();
 }
@@ -4195,8 +4197,21 @@ function renderCustomerReadinessCard(data) {
 }
 
 let settingsEvidenceRequestId = 0;
+let settingsEvidenceRefreshTimer = null;
 const SETTINGS_DIGEST_TIMEOUT_MS = 12000;
 const SETTINGS_READINESS_TIMEOUT_MS = 30000;
+const SETTINGS_EVIDENCE_REFRESH_INTERVAL_MS = 15000;
+
+function clearSettingsEvidenceAutoRefresh() {
+  if (!settingsEvidenceRefreshTimer) return;
+  window.clearTimeout(settingsEvidenceRefreshTimer);
+  settingsEvidenceRefreshTimer = null;
+}
+
+function settingsEvidenceUrl(path, requestId) {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}settings_request=${encodeURIComponent(requestId)}&settings_ts=${Date.now()}`;
+}
 
 function renderSettingsEvidenceMessage(message) {
   if (!settingsEvidenceCards) return;
@@ -4218,6 +4233,34 @@ function withSettingsEvidenceTimeout(promise, label, timeoutMs) {
       }), timeoutMs);
     }),
   ]);
+}
+
+function renderSettingsEvidenceToolbar(requestId, refreshedAt) {
+  const toolbar = document.createElement("div");
+  toolbar.className = "settings-evidence-toolbar";
+  toolbar.dataset.requestId = String(requestId);
+  const status = document.createElement("p");
+  status.className = "settings-evidence-loading";
+  status.textContent = `Updated ${new Date(refreshedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+  const refresh = document.createElement("button");
+  refresh.className = "ghost-button compact-button";
+  refresh.type = "button";
+  refresh.textContent = "Refresh";
+  refresh.setAttribute("aria-label", "Refresh weekly outcomes and customer readiness");
+  refresh.addEventListener("click", () => {
+    void refreshSettingsEvidenceCards({ reason: "manual" });
+  });
+  toolbar.append(status, refresh);
+  return toolbar;
+}
+
+function scheduleSettingsEvidenceAutoRefresh() {
+  clearSettingsEvidenceAutoRefresh();
+  if (!settingsEvidenceCards || settingsFlyout?.hidden) return;
+  settingsEvidenceRefreshTimer = window.setTimeout(() => {
+    settingsEvidenceRefreshTimer = null;
+    if (!settingsFlyout?.hidden) void refreshSettingsEvidenceCards({ reason: "auto" });
+  }, SETTINGS_EVIDENCE_REFRESH_INTERVAL_MS);
 }
 
 function renderSettingsUnavailableCard(kind, message) {
@@ -4255,16 +4298,21 @@ function renderSettingsUnavailableCard(kind, message) {
   return card;
 }
 
-async function refreshSettingsEvidenceCards() {
+async function refreshSettingsEvidenceCards(_options = {}) {
   if (!settingsEvidenceCards || settingsFlyout?.hidden) return;
+  clearSettingsEvidenceAutoRefresh();
   const requestId = ++settingsEvidenceRequestId;
   renderSettingsEvidenceMessage("Loading weekly outcomes and customer readiness...");
   const [digestResponse, readinessResponse] = await Promise.all([
-    withSettingsEvidenceTimeout(apiGet("/api/memory-value-digest?window=week"), "Weekly outcomes", SETTINGS_DIGEST_TIMEOUT_MS),
-    withSettingsEvidenceTimeout(apiGet("/api/customer-readiness"), "Customer readiness", SETTINGS_READINESS_TIMEOUT_MS),
+    withSettingsEvidenceTimeout(apiGet(settingsEvidenceUrl("/api/memory-value-digest?window=week", requestId)), "Weekly outcomes", SETTINGS_DIGEST_TIMEOUT_MS),
+    withSettingsEvidenceTimeout(apiGet(settingsEvidenceUrl("/api/customer-readiness", requestId)), "Customer readiness", SETTINGS_READINESS_TIMEOUT_MS),
   ]);
   if (requestId !== settingsEvidenceRequestId || settingsFlyout?.hidden) return;
+  const refreshedAt = Date.now();
   settingsEvidenceCards.innerHTML = "";
+  settingsEvidenceCards.dataset.requestId = String(requestId);
+  settingsEvidenceCards.dataset.refreshedAt = new Date(refreshedAt).toISOString();
+  settingsEvidenceCards.appendChild(renderSettingsEvidenceToolbar(requestId, refreshedAt));
   if (digestResponse.ok) {
     settingsEvidenceCards.appendChild(renderVerifiedMemoryOutcomesCard(digestResponse.data || {}));
   } else {
@@ -4275,6 +4323,7 @@ async function refreshSettingsEvidenceCards() {
   } else {
     settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("readiness", `Customer readiness unavailable: ${readinessResponse.data?.error || readinessResponse.status}`));
   }
+  scheduleSettingsEvidenceAutoRefresh();
 }
 
 function openSettingsSurface() {

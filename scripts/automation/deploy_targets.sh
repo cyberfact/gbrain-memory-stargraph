@@ -58,6 +58,7 @@ tracked_files=(
   tests/customer_readiness_smoke.mjs
   tests/memory_digest_smoke.mjs
   tests/search_api_ui_parity_smoke.mjs
+  tests/settings_readiness_parity_smoke.mjs
   tests/test_frontend_static.py
   tests/test_source_sync_preflight.py
   tests/test_todo_backlog_compaction.py

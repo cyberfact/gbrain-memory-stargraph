@@ -1373,6 +1373,19 @@ h2 {
   padding-right: 2px;
 }
 
+.settings-evidence-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.settings-evidence-toolbar .ghost-button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 4px 9px;
+}
+
 .settings-evidence-cards .verified-outcomes-card,
 .settings-evidence-cards .customer-readiness-card {
   margin-bottom: 0;
