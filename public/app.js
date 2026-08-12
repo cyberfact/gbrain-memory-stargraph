@@ -1503,7 +1503,10 @@ async function todoBacklogMarkdownForSearch(todoId) {
 }
 
 async function freshTodoBacklogMarkdownForSearch() {
-  return await prefetchTodoBacklogForSearch({ force: true });
+  const timeout = new Promise((resolve) => {
+    window.setTimeout(() => resolve(""), 1200);
+  });
+  return await Promise.race([prefetchTodoBacklogForSearch({ force: true }), timeout]);
 }
 
 function looksLikeExactSlug(value) {
