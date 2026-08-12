@@ -1247,9 +1247,22 @@ async function runLazySearch(query) {
       reportSearchTiming(searchStartedAt);
       return;
     }
-    const response = await withSearchTimeout(apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`), submittedQuery, SEARCH_TIMEOUT_MS);
+    const searchTimeoutMs = looksLikeTodoId(submittedQuery) ? Math.max(SEARCH_TIMEOUT_MS, 30000) : SEARCH_TIMEOUT_MS;
+    const response = await withSearchTimeout(apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`), submittedQuery, searchTimeoutMs);
     if (!response.ok) {
       reportSearchTerminalState(submittedQuery);
+      return;
+    }
+    const coverage = response.data.graph?.source?.coverage || {};
+    const archivedExactSlug = looksLikeTodoId(submittedQuery) && coverage.search_exact_todo_id_status === "complete"
+      ? (coverage.search_slugs || [])[0]
+      : "";
+    if (archivedExactSlug) {
+      applyGraphPayload(response.data.graph, archivedExactSlug);
+      showSearchSelectionFromGraph(archivedExactSlug);
+      requestRender();
+      await loadEntity(archivedExactSlug, { source: "search" }).catch(() => {});
+      setSearchFeedback(`Found ${submittedQuery.toUpperCase()}: ${archivedExactSlug}`, "success");
       return;
     }
     const partialSearch = response.data.graph?.source?.coverage?.search_status && response.data.graph.source.coverage.search_status !== "complete";
