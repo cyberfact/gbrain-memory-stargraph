@@ -81,7 +81,7 @@ try {
     );
   }, settledRequestId, { timeout: 1000 });
 
-  const uiState = await page.evaluate(() => {
+  const initialUiState = await page.evaluate(() => {
     const cards = document.querySelector("#settingsEvidenceCards");
     const digestCard = cards?.querySelector(".verified-outcomes-card");
     const readinessCard = cards?.querySelector(".customer-readiness-card");
@@ -118,18 +118,93 @@ try {
     readinessStatus: outcomeStatusLabel(apiState.readiness?.status),
     targetLine: `Configured targets: ${configured.verified_target_count ?? 0}/${configured.configured_target_count ?? 0} attested · ${outcomeStatusLabel(configured.status || targetEvidence.status)} · local ${outcomeStatusLabel(local.status)}`,
   };
-  const result = { uiState, expected };
+  await page.click('#settingsEvidenceCards button[aria-label="Refresh weekly outcomes and customer readiness"]');
+  await page.waitForFunction((previousId) => {
+    const panel = document.querySelector("#settingsFlyout");
+    const cards = document.querySelector("#settingsEvidenceCards");
+    return Boolean(
+      panel
+        && panel.hidden === false
+        && cards?.dataset.requestId
+        && cards.dataset.requestId !== previousId
+        && cards.querySelector(".verified-outcomes-card")
+        && cards.querySelector(".customer-readiness-card")
+    );
+  }, settledRequestId, { timeout: 60000 });
+  const manualRequestId = await page.locator("#settingsEvidenceCards").getAttribute("data-request-id");
+  await page.click("#refreshButton");
+  await page.waitForFunction((previousId) => {
+    const panel = document.querySelector("#settingsFlyout");
+    const cards = document.querySelector("#settingsEvidenceCards");
+    return Boolean(
+      panel
+        && panel.hidden === false
+        && cards?.dataset.requestId
+        && cards.dataset.requestId !== previousId
+        && cards.querySelector(".verified-outcomes-card")
+        && cards.querySelector(".customer-readiness-card")
+    );
+  }, manualRequestId, { timeout: 90000 });
+  const refreshedRequestId = await page.locator("#settingsEvidenceCards").getAttribute("data-request-id");
+  const refreshedApiState = settingsResponses.get(refreshedRequestId);
+  if (!refreshedApiState?.digest || !refreshedApiState?.readiness) {
+    throw new Error(`Missing refreshed Settings API payloads for request ${refreshedRequestId}`);
+  }
+  const refreshedOutcomes = refreshedApiState.digest?.verified_memory_outcomes || {};
+  const refreshedOutcomeCounts = refreshedOutcomes.summary_counts || {};
+  const refreshedReadinessCounts = refreshedApiState.readiness?.summary_counts || {};
+  const refreshedTargetEvidence = refreshedApiState.readiness?.target_evidence || {};
+  const refreshedConfigured = refreshedTargetEvidence.configured_remote || {};
+  const refreshedLocal = refreshedTargetEvidence.local || {};
+  const refreshedExpected = {
+    digestSubtitle: `${refreshedOutcomeCounts.gates_passed ?? 0}/${refreshedOutcomeCounts.gates_total ?? 0} gates passed · ${outcomeStatusLabel(refreshedOutcomes.status)}`,
+    digestStatus: outcomeStatusLabel(refreshedOutcomes.status),
+    readinessSubtitle: `${refreshedReadinessCounts.ready ?? 0}/${refreshedReadinessCounts.checks_total ?? 0} checks ready · ${outcomeStatusLabel(refreshedApiState.readiness?.status)}`,
+    readinessStatus: outcomeStatusLabel(refreshedApiState.readiness?.status),
+    targetLine: `Configured targets: ${refreshedConfigured.verified_target_count ?? 0}/${refreshedConfigured.configured_target_count ?? 0} attested · ${outcomeStatusLabel(refreshedConfigured.status || refreshedTargetEvidence.status)} · local ${outcomeStatusLabel(refreshedLocal.status)}`,
+  };
+  const refreshedUiState = await page.evaluate(() => {
+    const panel = document.querySelector("#settingsFlyout");
+    const cards = document.querySelector("#settingsEvidenceCards");
+    const digestCard = cards?.querySelector(".verified-outcomes-card");
+    const readinessCard = cards?.querySelector(".customer-readiness-card");
+    return {
+      panelVisible: Boolean(panel && panel.hidden === false),
+      requestId: cards?.dataset.requestId || "",
+      refreshedAt: cards?.dataset.refreshedAt || "",
+      digestSubtitle: digestCard?.querySelector(".verified-outcomes-header p")?.textContent || "",
+      digestStatus: digestCard?.querySelector(".verified-outcomes-status")?.textContent || "",
+      readinessSubtitle: readinessCard?.querySelector(".customer-readiness-header p")?.textContent || "",
+      readinessStatus: readinessCard?.querySelector(".customer-readiness-status")?.textContent || "",
+      targetLine: Array.from(readinessCard?.querySelectorAll(".customer-readiness-privacy") || [])
+        .map((node) => node.textContent || "")
+        .find((text) => text.startsWith("Configured targets:")) || "",
+      leaksSecret: new RegExp("api[_-]?key|sk-[A-Za-z0-9]{20,}|authorization|raw prompt|/Users/", "i").test(cards?.textContent || ""),
+      refreshButtonVisible: Boolean(cards?.querySelector('button[aria-label="Refresh weekly outcomes and customer readiness"]')?.offsetParent),
+    };
+  });
+  const result = { initialUiState, expected, refreshedUiState, refreshedExpected };
   console.log(JSON.stringify(result, null, 2));
   if (
-    !uiState.requestId
-    || !uiState.refreshedAt
-    || !uiState.refreshButtonVisible
-    || uiState.digestSubtitle !== expected.digestSubtitle
-    || uiState.digestStatus !== expected.digestStatus
-    || uiState.readinessSubtitle !== expected.readinessSubtitle
-    || uiState.readinessStatus !== expected.readinessStatus
-    || uiState.targetLine !== expected.targetLine
-    || uiState.leaksSecret
+    !initialUiState.requestId
+    || !initialUiState.refreshedAt
+    || !initialUiState.refreshButtonVisible
+    || initialUiState.digestSubtitle !== expected.digestSubtitle
+    || initialUiState.digestStatus !== expected.digestStatus
+    || initialUiState.readinessSubtitle !== expected.readinessSubtitle
+    || initialUiState.readinessStatus !== expected.readinessStatus
+    || initialUiState.targetLine !== expected.targetLine
+    || initialUiState.leaksSecret
+    || !refreshedUiState.panelVisible
+    || !refreshedUiState.requestId
+    || !refreshedUiState.refreshedAt
+    || !refreshedUiState.refreshButtonVisible
+    || refreshedUiState.digestSubtitle !== refreshedExpected.digestSubtitle
+    || refreshedUiState.digestStatus !== refreshedExpected.digestStatus
+    || refreshedUiState.readinessSubtitle !== refreshedExpected.readinessSubtitle
+    || refreshedUiState.readinessStatus !== refreshedExpected.readinessStatus
+    || refreshedUiState.targetLine !== refreshedExpected.targetLine
+    || refreshedUiState.leaksSecret
   ) {
     throw new Error(`Settings readiness cards did not match current API payloads: ${JSON.stringify(result)}`);
   }

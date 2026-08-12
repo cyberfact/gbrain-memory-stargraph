@@ -252,6 +252,73 @@ class ApiEndpointTests(unittest.TestCase):
         MemoryStargraphHandler.do_PUT(handler)
         return captured["status"], captured["payload"]
 
+    def test_exact_todo_id_search_reads_completed_archives(self):
+        root = """# Memory Starmap TODO List
+
+## Todo Items
+
+| id | status | priority | title | node | updated | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| SG-0202 | planned | P1 | Restore archive search | [[notes/memory-starmap-todo-list/restore-archive-search]] | 2026-08-12 | Current row. |
+
+## Completed Archives
+
+| archive | sequence | first id | last id | count |
+| --- | --- | --- | --- | --- |
+| [[notes/memory-starmap-todo-list/completed-archive-0004]] | 4 | SG-0151 | SG-0201 | 2 |
+"""
+        archive = """# Memory Starmap Completed TODO Archive 0004
+
+## Todo Items
+
+| id | status | priority | title | node | updated | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| SG-0151 | completed | P1 | Earlier completed row | [[notes/memory-starmap-todo-list/earlier-completed-row]] | 2026-08-01 | Done. |
+| SG-0201 | completed | P1 | Include persist identity metadata in SRE decision bundles | [[notes/memory-starmap-todo-list/include-persist-identity-metadata-in-sre-decision-bundles]] | 2026-08-11 | Done. |
+"""
+
+        def fake_run_gbrain(command, slug, timeout=0):
+            self.assertEqual(command, "get")
+            return {"notes/memory-starmap-todo-list": root, "notes/memory-starmap-todo-list/completed-archive-0004": archive}[slug]
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            results, status = server.exact_todo_id_search_results("SG-0201")
+        self.assertEqual(status, "complete")
+        self.assertEqual(results[0]["slug"], "notes/memory-starmap-todo-list/include-persist-identity-metadata-in-sre-decision-bundles")
+        self.assertIn("archived", results[0]["preview"].lower())
+
+    def test_exact_todo_id_search_fails_closed_on_archive_mismatch(self):
+        root = """# Memory Starmap TODO List
+
+## Todo Items
+
+| id | status | priority | title | node | updated | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Completed Archives
+
+| archive | sequence | first id | last id | count |
+| --- | --- | --- | --- | --- |
+| [[notes/memory-starmap-todo-list/completed-archive-0004]] | 4 | SG-0151 | SG-0201 | 50 |
+"""
+        archive = """# Archive
+
+## Todo Items
+
+| id | status | priority | title | node | updated | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| SG-0201 | completed | P1 | Incomplete archive | [[notes/incomplete]] | 2026-08-11 | Bad metadata. |
+"""
+
+        def fake_run_gbrain(command, slug, timeout=0):
+            self.assertEqual(command, "get")
+            return {"notes/memory-starmap-todo-list": root, "notes/memory-starmap-todo-list/completed-archive-0004": archive}[slug]
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            results, status = server.exact_todo_id_search_results("SG-0201")
+        self.assertEqual(results, [])
+        self.assertEqual(status, "partial_timeout")
+
     def test_health_uses_cached_startup_graph_without_graph_request(self):
         fake_store = FakeStore()
         fake_store.graph = None

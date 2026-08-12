@@ -193,7 +193,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.193"
+UI_VERSION = "V1.0.194"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
@@ -1944,6 +1944,46 @@ def parse_memory_starmap_todo_rows(markdown):
     return rows
 
 
+def parse_memory_starmap_archive_index(markdown):
+    lines = str(markdown or "").splitlines()
+    columns = ("archive", "sequence", "first id", "last id", "count")
+    start = None
+    for index, line in enumerate(lines):
+        if not line.strip().startswith("|"):
+            continue
+        cells = tuple(cell.lower() for cell in split_markdown_table_row(line))
+        if cells[: len(columns)] == columns:
+            start = index
+            break
+    if start is None:
+        return []
+    entries = []
+    for line in lines[start + 2 :]:
+        if not line.strip().startswith("|"):
+            break
+        cells = split_markdown_table_row(line)
+        if len(cells) < len(columns):
+            continue
+        match = re.search(r"\[\[([^\]]+)\]\]", cells[0])
+        if not match:
+            continue
+        try:
+            sequence = int(cells[1])
+            count = int(cells[4])
+        except ValueError:
+            continue
+        entries.append(
+            {
+                "slug": match.group(1).strip(),
+                "sequence": sequence,
+                "first_id": cells[2].strip().upper(),
+                "last_id": cells[3].strip().upper(),
+                "count": count,
+            }
+        )
+    return entries
+
+
 def todo_row_node_slug(row):
     match = re.search(r"\[\[([^\]]+)\]\]", str(row.get("node") or ""))
     return match.group(1).strip() if match else ""
@@ -1951,6 +1991,28 @@ def todo_row_node_slug(row):
 
 def looks_like_todo_id(value):
     return bool(re.fullmatch(r"SG-\d{3,}", str(value or "").strip(), re.IGNORECASE))
+
+
+def todo_id_number(value):
+    match = re.fullmatch(r"SG-(\d{3,})", str(value or "").strip().upper())
+    return int(match.group(1)) if match else None
+
+
+def todo_row_search_result(row, preview_prefix="Exact TODO ID match"):
+    slug = todo_row_node_slug(row)
+    if not slug:
+        return None
+    title = str(row.get("title") or make_label(slug))
+    status = str(row.get("status") or "").strip()
+    preview = preview_prefix
+    if status:
+        preview += f": status {status}"
+    return {
+        "slug": slug,
+        "score": 100.0,
+        "label": title[:120],
+        "preview": preview,
+    }
 
 
 def exact_todo_id_search_results(query):
@@ -1964,22 +2026,34 @@ def exact_todo_id_search_results(query):
     for row in parse_memory_starmap_todo_rows(backlog):
         if str(row.get("id") or "").strip().upper() != todo_id:
             continue
-        slug = todo_row_node_slug(row)
-        if not slug:
-            return [], "complete"
-        title = str(row.get("title") or make_label(slug))
-        status = str(row.get("status") or "").strip()
-        preview = "Exact TODO ID match"
-        if status:
-            preview += f": status {status}"
-        return [
-            {
-                "slug": slug,
-                "score": 100.0,
-                "label": title[:120],
-                "preview": preview,
-            }
-        ], "complete"
+        result = todo_row_search_result(row)
+        return ([result] if result else []), "complete"
+    target_number = todo_id_number(todo_id)
+    for archive in parse_memory_starmap_archive_index(backlog):
+        first_number = todo_id_number(archive.get("first_id"))
+        last_number = todo_id_number(archive.get("last_id"))
+        if target_number is None or first_number is None or last_number is None:
+            continue
+        if not (first_number <= target_number <= last_number):
+            continue
+        try:
+            archive_markdown = run_gbrain("get", archive["slug"], timeout=4)
+        except Exception:  # noqa: BLE001
+            return [], "partial_timeout"
+        rows = parse_memory_starmap_todo_rows(archive_markdown)
+        ids = [str(row.get("id") or "").strip().upper() for row in rows]
+        if (
+            len(rows) != archive["count"]
+            or not ids
+            or ids[0] != archive["first_id"]
+            or ids[-1] != archive["last_id"]
+        ):
+            return [], "partial_timeout"
+        for row in rows:
+            if str(row.get("id") or "").strip().upper() == todo_id:
+                result = todo_row_search_result(row, "Exact archived TODO ID match")
+                return ([result] if result else []), "complete"
+        return [], "complete"
     return [], "complete"
 
 

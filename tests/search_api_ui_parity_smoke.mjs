@@ -28,6 +28,10 @@ if (!chromium) {
 const appUrl = process.env.MEMORY_STARGRAPH_URL || "https://127.0.0.1:8788";
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const query = "optional timeout telemetry is not a todo";
+const archivedExactIds = new Map([
+  ["SG-0200", "notes/memory-starmap-todo-list/refresh-settings-readiness-cards-from-current-readiness-apis"],
+  ["SG-0201", "notes/memory-starmap-todo-list/include-persist-identity-metadata-in-sre-decision-bundles"],
+]);
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, ignoreHTTPSErrors: true });
 
@@ -85,6 +89,59 @@ try {
     || !state.searchRailOpen
   ) {
     throw new Error(`API/UI search parity failed: ${JSON.stringify(state)}`);
+  }
+
+  for (const [todoId, expectedSlug] of archivedExactIds) {
+    const exactApiResponse = await page.request.get(`${appUrl}/api/search?q=${encodeURIComponent(todoId)}`, { ignoreHTTPSErrors: true, timeout: 30000 });
+    if (!exactApiResponse.ok()) {
+      throw new Error(`${todoId} API search failed with HTTP ${exactApiResponse.status()}`);
+    }
+    const exactApiPayload = await exactApiResponse.json();
+    const exactApiCoverage = exactApiPayload.graph?.source?.coverage || {};
+    const exactApiTopSlug = exactApiCoverage.search_slugs?.[0] || "";
+    if (exactApiTopSlug !== expectedSlug) {
+      throw new Error(`${todoId} API did not return archived child slug first: ${JSON.stringify({ exactApiTopSlug, expectedSlug, exactApiCoverage })}`);
+    }
+    await page.click("#navSearchButton");
+    await page.fill("#searchInput", todoId);
+    await page.press("#searchInput", "Enter");
+    await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 60000 });
+    await page.waitForFunction(({ queryId, expected }) => {
+      const appState = window.__MEMORY_STARGRAPH__?.getState();
+      const coverage = appState?.graph?.source?.coverage || {};
+      const firstVisible = (coverage.search_slugs || []).find((slug) => appState?.nodeMap?.has(slug)) || "";
+      return coverage.last_search_query === queryId
+        && coverage.search_slugs?.[0] === expected
+        && (appState.focusSlug === expected || firstVisible === expected);
+    }, { queryId: todoId, expected: expectedSlug }, { timeout: 15000 });
+    const exactUiState = await page.evaluate((expected) => {
+      const appState = window.__MEMORY_STARGRAPH__.getState();
+      const coverage = appState.graph.source?.coverage || {};
+      return {
+        topSlug: coverage.search_slugs?.[0] || "",
+        focusSlug: appState.focusSlug,
+        firstVisibleSearchResult: (coverage.search_slugs || []).find((slug) => appState.nodeMap.has(slug)) || "",
+        exactTodoStatus: coverage.search_exact_todo_id_status,
+        feedback: document.querySelector("#searchFeedback")?.textContent || "",
+        expected,
+      };
+    }, expectedSlug);
+    console.log(JSON.stringify({ todoId, exactUiState }, null, 2));
+    if (
+      exactUiState.topSlug !== expectedSlug
+      || (exactUiState.focusSlug !== expectedSlug && exactUiState.firstVisibleSearchResult !== expectedSlug)
+      || exactUiState.exactTodoStatus !== "complete"
+      || !exactUiState.feedback.includes(expectedSlug)
+    ) {
+      throw new Error(`${todoId} UI did not focus/list archived exact match: ${JSON.stringify(exactUiState)}`);
+    }
+  }
+
+  const missingResponse = await page.request.get(`${appUrl}/api/search?q=SG-9999`, { ignoreHTTPSErrors: true, timeout: 30000 });
+  const missingPayload = await missingResponse.json();
+  const missingCoverage = missingPayload.graph?.source?.coverage || {};
+  if ((missingCoverage.search_slugs || []).length !== 0 || missingCoverage.search_exact_todo_id_status !== "complete") {
+    throw new Error(`SG-9999 should remain a truthful no-result exact TODO search: ${JSON.stringify(missingCoverage)}`);
   }
 } finally {
   await browser.close();

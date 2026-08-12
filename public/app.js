@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.193";
+const UI_VERSION = "V1.0.194";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -1567,13 +1567,11 @@ async function tryExactTodoIdSearch(todoId) {
     slug = todoSlugFromBacklogMarkdown(await freshTodoBacklogMarkdownForSearch(), todoId);
   }
   if (!slug) {
-    reportSearchTerminalState(todoId);
-    return "terminal";
+    return false;
   }
   const loaded = await tryExactSlugSearch(slug, { awaitDetails: false });
   if (!loaded) {
-    reportSearchTerminalState(todoId);
-    return "terminal";
+    return false;
   }
   setSearchFeedback(`Found ${String(todoId).trim().toUpperCase()}: ${slug}`, "success");
   return "loaded";
@@ -4247,7 +4245,10 @@ function renderSettingsEvidenceToolbar(requestId, refreshedAt) {
   refresh.type = "button";
   refresh.textContent = "Refresh";
   refresh.setAttribute("aria-label", "Refresh weekly outcomes and customer readiness");
-  refresh.addEventListener("click", () => {
+  refresh.addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.settingsPinned = true;
+    showFloatingPanel(settingsFlyout, navSettingsButton);
     void refreshSettingsEvidenceCards({ reason: "manual" });
   });
   toolbar.append(status, refresh);
@@ -4299,7 +4300,12 @@ function renderSettingsUnavailableCard(kind, message) {
 }
 
 async function refreshSettingsEvidenceCards(_options = {}) {
-  if (!settingsEvidenceCards || settingsFlyout?.hidden) return;
+  if (!settingsEvidenceCards) return;
+  if (settingsFlyout?.hidden && _options.forceVisible) {
+    state.settingsPinned = true;
+    showFloatingPanel(settingsFlyout, navSettingsButton);
+  }
+  if (settingsFlyout?.hidden) return;
   clearSettingsEvidenceAutoRefresh();
   const requestId = ++settingsEvidenceRequestId;
   renderSettingsEvidenceMessage("Loading weekly outcomes and customer readiness...");
@@ -4307,6 +4313,10 @@ async function refreshSettingsEvidenceCards(_options = {}) {
     withSettingsEvidenceTimeout(apiGet(settingsEvidenceUrl("/api/memory-value-digest?window=week", requestId)), "Weekly outcomes", SETTINGS_DIGEST_TIMEOUT_MS),
     withSettingsEvidenceTimeout(apiGet(settingsEvidenceUrl("/api/customer-readiness", requestId)), "Customer readiness", SETTINGS_READINESS_TIMEOUT_MS),
   ]);
+  if (settingsFlyout?.hidden && _options.forceVisible) {
+    state.settingsPinned = true;
+    showFloatingPanel(settingsFlyout, navSettingsButton);
+  }
   if (requestId !== settingsEvidenceRequestId || settingsFlyout?.hidden) return;
   const refreshedAt = Date.now();
   settingsEvidenceCards.innerHTML = "";
@@ -7924,8 +7934,16 @@ function bindEvents() {
     hideFloatingPanels();
   });
 
-  refreshButton?.addEventListener("click", async () => {
+  refreshButton?.addEventListener("click", async (event) => {
+    const settingsOpen = Boolean(settingsFlyout && !settingsFlyout.hidden);
+    if (settingsOpen) {
+      event.stopPropagation();
+      state.settingsPinned = true;
+    }
     await fetchGraph("/api/refresh", { preserveFocus: true });
+    if (settingsOpen) {
+      await refreshSettingsEvidenceCards({ reason: "graph-refresh", forceVisible: true });
+    }
   });
 
   zoomOutButton.addEventListener("click", () => {
