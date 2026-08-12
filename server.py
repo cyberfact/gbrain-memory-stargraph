@@ -2020,7 +2020,7 @@ def exact_todo_id_search_results(query):
     if not looks_like_todo_id(todo_id):
         return None, "not_exact_todo_id"
     try:
-        backlog = run_gbrain("get", "notes/memory-starmap-todo-list", timeout=4)
+        backlog = run_gbrain("get", "notes/memory-starmap-todo-list", timeout=EXACT_TODO_GBRAIN_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001
         return [], "partial_timeout"
     for row in parse_memory_starmap_todo_rows(backlog):
@@ -2037,7 +2037,7 @@ def exact_todo_id_search_results(query):
         if not (first_number <= target_number <= last_number):
             continue
         try:
-            archive_markdown = run_gbrain("get", archive["slug"], timeout=4)
+            archive_markdown = run_gbrain("get", archive["slug"], timeout=EXACT_TODO_GBRAIN_TIMEOUT_SECONDS)
         except Exception:  # noqa: BLE001
             return [], "partial_timeout"
         rows = parse_memory_starmap_todo_rows(archive_markdown)
@@ -2521,6 +2521,7 @@ EVIDENCE_SEARCH_TYPES = ("learning", "todo", "report", "run")
 SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
 SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
+EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 7
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
     "timeout": ("latency", "slow", "terminal"),
