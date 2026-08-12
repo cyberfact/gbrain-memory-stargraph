@@ -1,0 +1,416 @@
+{
+  "archives": [
+    {
+      "count": 50,
+      "first_id": "SG-0151",
+      "last_id": "SG-0201",
+      "rows": [
+        {
+          "id": "SG-0151",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-privacy-safe-sample-brain-first-value-demo-path",
+          "status": "completed",
+          "title": "Add privacy-safe sample brain first-value demo path",
+          "updated": "2026-07-20T02:52:00-07:00"
+        },
+        {
+          "id": "SG-0152",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/add-memory-value-digest-for-product-and-goal-progress",
+          "status": "completed",
+          "title": "Add memory value digest for product and goal progress",
+          "updated": "2026-07-20T02:52:00-07:00"
+        },
+        {
+          "id": "SG-0153",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/restore-clear-missing-page-state-for-unknown-deep-links",
+          "status": "completed",
+          "title": "Restore clear missing-page state for unknown deep links",
+          "updated": "2026-07-20T02:52:00-07:00"
+        },
+        {
+          "id": "SG-0154",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/fix-sre-worker-source-sync-preflight-coverage",
+          "status": "completed",
+          "title": "Fix SRE worker source-sync preflight coverage",
+          "updated": "2026-07-20T02:52:00-07:00"
+        },
+        {
+          "id": "SG-0155",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/improve-filter-drawer-trigger-sensitivity",
+          "status": "completed",
+          "title": "Improve filter drawer trigger sensitivity",
+          "updated": "2026-07-20T02:52:00-07:00"
+        },
+        {
+          "id": "SG-0156",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/restore-true-not-found-panel-for-unknown-deep-links-after-v10153",
+          "status": "completed",
+          "title": "Restore true not-found panel for unknown deep links after V1.0.153",
+          "updated": "2026-07-21T04:01:00-07:00"
+        },
+        {
+          "id": "SG-0157",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/make-first-value-modals-close-unambiguously-and-show-digest-loading-feedback",
+          "status": "completed",
+          "title": "Make first-value modals close unambiguously and show digest loading feedback",
+          "updated": "2026-07-21T04:01:00-07:00"
+        },
+        {
+          "id": "SG-0158",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/define-safe-weekly-resilience-fault-target",
+          "status": "completed",
+          "title": "Define safe weekly resilience fault target",
+          "updated": "2026-07-21T04:01:00-07:00"
+        },
+        {
+          "id": "SG-0159",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/standardize-source-sync-preflight-across-recurring-memory-stargraph-workers",
+          "status": "completed",
+          "title": "Standardize source-sync preflight across recurring Memory Stargraph workers",
+          "updated": "2026-07-21T04:01:00-07:00"
+        },
+        {
+          "id": "SG-0160",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/hide-raw-gbrain-index-marker-on-the-root-selection-panel",
+          "status": "completed",
+          "title": "Hide raw GBrain index marker on the root selection panel",
+          "updated": "2026-07-22T08:31:00-07:00"
+        },
+        {
+          "id": "SG-0161",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-configurable-gbrain-backend-setting",
+          "status": "completed",
+          "title": "Add configurable GBrain backend setting",
+          "updated": "2026-07-23T08:53:13-07:00"
+        },
+        {
+          "id": "SG-0162",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/reduce-recurring-ask-yoda-broad-graph-timeout-regression",
+          "status": "completed",
+          "title": "Reduce recurring Ask Yoda broad-graph timeout regression",
+          "updated": "2026-07-24T07:12:00-07:00"
+        },
+        {
+          "id": "SG-0163",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/make-search-show-results-or-clear-terminal-state-for-exact-todo-ids",
+          "status": "completed",
+          "title": "Make search show results or a clear terminal state for exact TODO IDs",
+          "updated": "2026-07-28T02:44:06-07:00"
+        },
+        {
+          "id": "SG-0164",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-first-run-activation-funnel-for-sample-to-live-memory-stargraph",
+          "status": "completed",
+          "title": "Add first-run activation funnel for sample-to-live Memory Stargraph",
+          "updated": "2026-07-28T15:05:31-07:00"
+        },
+        {
+          "id": "SG-0165",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/improve-natural-language-search-relevance-for-runs-reports-and-learnings",
+          "status": "completed",
+          "title": "Improve natural-language search relevance for Runs, reports, and Learnings",
+          "updated": "2026-07-28T15:28:00-07:00"
+        },
+        {
+          "id": "SG-0167",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/resolve-ask-yoda-openclaw-provider-timeout-after-node-runtime-fix",
+          "status": "completed",
+          "title": "Resolve Ask Yoda OpenClaw provider timeout after Node runtime fix",
+          "updated": "2026-07-29T08:24:28-07:00"
+        },
+        {
+          "id": "SG-0168",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/bound-natural-language-search-latency-and-terminal-feedback",
+          "status": "completed",
+          "title": "Bound natural-language search latency and terminal feedback",
+          "updated": "2026-07-29T11:58:00-07:00"
+        },
+        {
+          "id": "SG-0169",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/make-dashboard-health-ready-from-cached-graph-at-startup",
+          "status": "completed",
+          "title": "Make dashboard health ready from cached graph at startup",
+          "updated": "2026-07-30T00:21:00-07:00"
+        },
+        {
+          "id": "SG-0170",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/make-recurring-backlog-workers-independent-of-direct-local-postgresql-ac",
+          "status": "completed",
+          "title": "Make recurring backlog workers independent of direct local PostgreSQL access",
+          "updated": "2026-07-30T09:09:10-07:00"
+        },
+        {
+          "id": "SG-0171",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/make-recurring-worker-run-persistence-independent-of-restricted-loopback",
+          "status": "completed",
+          "title": "Make recurring worker Run persistence independent of restricted loopback transport",
+          "updated": "2026-07-30T09:54:56-07:00"
+        },
+        {
+          "id": "SG-0172",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/prefer-configured-dashboard-route-over-loopback-for-worker-persistence",
+          "status": "completed",
+          "title": "Prefer configured dashboard route over loopback for worker persistence",
+          "updated": "2026-07-30T10:11:48-07:00"
+        },
+        {
+          "id": "SG-0173",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/make-worker-persistence-readback-compare-normalized-yaml-semantics",
+          "status": "completed",
+          "title": "Make worker persistence readback compare normalized YAML semantics",
+          "updated": "2026-07-30T10:29:00-07:00"
+        },
+        {
+          "id": "SG-0174",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/use-top-level-curl-for-recurring-worker-persistence-transport",
+          "status": "completed",
+          "title": "Use top-level curl for recurring worker persistence transport",
+          "updated": "2026-07-30T11:08:00-07:00"
+        },
+        {
+          "id": "SG-0175",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/emit-offline-top-level-curl-commands-for-worker-persistence",
+          "status": "completed",
+          "title": "Emit offline top-level curl commands for worker persistence",
+          "updated": "2026-07-30T11:42:00-07:00"
+        },
+        {
+          "id": "SG-0176",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-host-managed-capture-link-job-spool-runner",
+          "status": "completed",
+          "title": "Add host-managed Capture Link job spool runner",
+          "updated": "2026-07-30T12:42:57-07:00"
+        },
+        {
+          "id": "SG-0177",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/run-empty-queue-enrichment-inside-capture-link-host-runner",
+          "status": "completed",
+          "title": "Run empty-queue enrichment inside Capture Link host runner",
+          "updated": "2026-07-30T13:20:39-07:00"
+        },
+        {
+          "id": "SG-0178",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/fix-capture-link-runner-progress-and-candidate-scope-semantics",
+          "status": "completed",
+          "title": "Fix Capture Link runner progress and candidate-scope semantics",
+          "updated": "2026-07-30T13:55:30-07:00"
+        },
+        {
+          "id": "SG-0179",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/bridge-learning-and-sre-recurring-workers-through-host-spool",
+          "status": "completed",
+          "title": "Bridge Learning and SRE recurring workers through host spool",
+          "updated": "2026-07-30T14:48:14-07:00"
+        },
+        {
+          "id": "SG-0180",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/surface-partial-search-results-before-timeout",
+          "status": "completed",
+          "title": "Surface partial search results before timeout",
+          "updated": "2026-07-30T21:23:20-07:00"
+        },
+        {
+          "id": "SG-0181",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/focus-requested-deep-link-after-lazy-selection-state",
+          "status": "completed",
+          "title": "Focus requested deep link after lazy selection state",
+          "updated": "2026-07-30T21:38:51-07:00"
+        },
+        {
+          "id": "SG-0182",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/move-autopilot-follow-ups-to-the-left-sidebar",
+          "status": "completed",
+          "title": "Move Autopilot Follow-ups to the left sidebar",
+          "updated": "2026-07-31T07:56:00-07:00"
+        },
+        {
+          "id": "SG-0183",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/make-search-rail-open-an-enabled-search-surface-after-graph-load",
+          "status": "completed",
+          "title": "Make Search rail open an enabled search surface after graph load",
+          "updated": "2026-07-31T21:03:00-07:00"
+        },
+        {
+          "id": "SG-0184",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-a-cross-session-retrieval-quality-benchmark-and-evidence-receipts",
+          "status": "completed",
+          "title": "Add a cross-session retrieval quality benchmark and evidence receipts",
+          "updated": "2026-08-01T07:57:00-07:00"
+        },
+        {
+          "id": "SG-0185",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/keep-natural-language-ui-selection-aligned-with-top-api-search-slug",
+          "status": "completed",
+          "title": "Keep natural-language UI selection aligned with top API search slug",
+          "updated": "2026-08-01T21:09:00-07:00"
+        },
+        {
+          "id": "SG-0186",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-a-weekly-verified-memory-outcomes-surface",
+          "status": "completed",
+          "title": "Add a weekly verified memory outcomes surface",
+          "updated": "2026-08-02T04:54:04-07:00"
+        },
+        {
+          "id": "SG-0187",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/separate-superseded-historical-failures-from-current-weekly-blockers",
+          "status": "completed",
+          "title": "Separate superseded historical failures from current weekly blockers",
+          "updated": "2026-08-02T05:22:00-07:00"
+        },
+        {
+          "id": "SG-0188",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-a-customer-readiness-and-safe-next-step-card",
+          "status": "completed",
+          "title": "Add a customer readiness and safe next-step card",
+          "updated": "2026-08-02T08:12:00-07:00"
+        },
+        {
+          "id": "SG-0189",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/drain-non-empty-capture-link-snapshots-in-the-host-runner",
+          "status": "completed",
+          "title": "Drain non-empty Capture Link snapshots in the host runner",
+          "updated": "2026-08-03T08:12:00-07:00"
+        },
+        {
+          "id": "SG-0190",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/focus-the-search-input-when-opening-search-from-the-rail",
+          "status": "completed",
+          "title": "Focus the search input when opening Search from the rail",
+          "updated": "2026-08-04T04:10:30-07:00"
+        },
+        {
+          "id": "SG-0191",
+          "priority": "P2",
+          "slug": "notes/memory-starmap-todo-list/make-settings-expose-weekly-outcomes-and-customer-readiness-cards-after-",
+          "status": "completed",
+          "title": "Make Settings expose weekly outcomes and customer readiness cards after graph selection",
+          "updated": "2026-08-08T04:05:21-07:00"
+        },
+        {
+          "id": "SG-0192",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/make-capture-link-terminalization-atomically-clear-lifecycle-tags",
+          "status": "completed",
+          "title": "Make Capture Link terminalization atomically clear lifecycle tags",
+          "updated": "2026-08-08T08:26:09-07:00"
+        },
+        {
+          "id": "SG-0193",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/persist-global-active-tag-readback-in-capture-link-terminal-results",
+          "status": "completed",
+          "title": "Persist global active-tag readback in Capture Link terminal results",
+          "updated": "2026-08-08T08:58:36-07:00"
+        },
+        {
+          "id": "SG-0194",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/re-rank-natural-language-search-after-lifecycle-tag-corpus-growth",
+          "status": "completed",
+          "title": "Re-rank natural-language search after lifecycle-tag corpus growth",
+          "updated": "2026-08-08T21:18:03-07:00"
+        },
+        {
+          "id": "SG-0195",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/restore-loaded-search-discoverability-for-exact-ids-and-known-terms",
+          "status": "completed",
+          "title": "Restore loaded-search discoverability for exact IDs and known terms",
+          "updated": "2026-08-09T04:36:08-07:00"
+        },
+        {
+          "id": "SG-0196",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/add-numeric-sre-capacity-backup-and-restore-evidence",
+          "status": "completed",
+          "title": "Add numeric SRE capacity backup and restore evidence",
+          "updated": "2026-08-09T15:22:44-07:00"
+        },
+        {
+          "id": "SG-0197",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/protect-natural-language-sentinel-queries-after-sre-evidence-growth",
+          "status": "completed",
+          "title": "Protect natural-language sentinel queries after SRE evidence growth",
+          "updated": "2026-08-09T21:08:38-07:00"
+        },
+        {
+          "id": "SG-0198",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/reload-and-attest-the-recurring-bridge-after-bridge-code-deploys",
+          "status": "completed",
+          "title": "Reload and attest the recurring bridge after bridge code deploys",
+          "updated": "2026-08-10T03:30:00-07:00"
+        },
+        {
+          "id": "SG-0199",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/attest-configured-target-readiness-from-durable-deployment-evidence",
+          "status": "completed",
+          "title": "Attest configured-target readiness from durable deployment evidence",
+          "updated": "2026-08-10T08:34:50-07:00"
+        },
+        {
+          "id": "SG-0200",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/refresh-settings-readiness-cards-from-current-readiness-apis",
+          "status": "completed",
+          "title": "Refresh Settings readiness cards from current readiness APIs",
+          "updated": "2026-08-10T21:18:00-07:00"
+        },
+        {
+          "id": "SG-0201",
+          "priority": "P1",
+          "slug": "notes/memory-starmap-todo-list/include-persist-identity-metadata-in-sre-decision-bundles",
+          "status": "completed",
+          "title": "Include persist identity metadata in SRE decision bundles",
+          "updated": "2026-08-11T03:20:20-07:00"
+        }
+      ],
+      "sequence": 4,
+      "slug": "notes/memory-starmap-todo-list/completed-archive-0004"
+    }
+  ],
+  "generated_at": "2026-08-11T21:55:00-07:00",
+  "schema": "memory-stargraph-completed-todo-archive-index-v1",
+  "source": "notes/memory-starmap-todo-list/completed-archive-0004"
+}

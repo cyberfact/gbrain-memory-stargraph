@@ -148,6 +148,7 @@ RESOLVER_EVENTS_PATH = DATA_DIR / "resolver_dispatch_events.json"
 RESOLVER_PROPOSALS_PATH = DATA_DIR / "resolver_proposals.json"
 RESOLVER_DREAM_LOG_PATH = DATA_DIR / "resolver_dream_runs.json"
 DEPLOYMENT_ATTESTATIONS_PATH = DATA_DIR / "deployment_attestations.json"
+COMPLETED_TODO_ARCHIVE_INDEX_PATH = ROOT / "config" / "completed_todo_archive_index.json"
 GBRAIN = Path(str(CONFIG["gbrain_path"])).expanduser()
 MAX_LIST_PAGES = int(CONFIG["max_list_pages"])
 GRAPH_DEPTH = int(CONFIG["graph_depth"])
@@ -2015,10 +2016,53 @@ def todo_row_search_result(row, preview_prefix="Exact TODO ID match"):
     }
 
 
+def archived_todo_index_search_result(todo_id):
+    try:
+        payload = json.loads(COMPLETED_TODO_ARCHIVE_INDEX_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    if payload.get("schema") != "memory-stargraph-completed-todo-archive-index-v1":
+        return None
+    for archive in payload.get("archives") or []:
+        if not isinstance(archive, dict):
+            continue
+        rows = archive.get("rows") or []
+        first_id = str(archive.get("first_id") or "").strip().upper()
+        last_id = str(archive.get("last_id") or "").strip().upper()
+        try:
+            expected_count = int(archive.get("count"))
+        except (TypeError, ValueError):
+            continue
+        ids = [str(row.get("id") or "").strip().upper() for row in rows if isinstance(row, dict)]
+        if len(rows) != expected_count or not ids or ids[0] != first_id or ids[-1] != last_id:
+            continue
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("id") or "").strip().upper() != todo_id:
+                continue
+            slug = str(row.get("slug") or "").strip()
+            if not slug.startswith("notes/memory-starmap-todo-list/"):
+                return None
+            title = str(row.get("title") or make_label(slug))
+            status = str(row.get("status") or "").strip()
+            preview = "Exact archived TODO ID match"
+            if status:
+                preview += f": status {status}"
+            return {
+                "slug": slug,
+                "score": 100.0,
+                "label": title[:120],
+                "preview": preview,
+            }
+    return None
+
+
 def exact_todo_id_search_results(query):
     todo_id = str(query or "").strip().upper()
     if not looks_like_todo_id(todo_id):
         return None, "not_exact_todo_id"
+    indexed_result = archived_todo_index_search_result(todo_id)
+    if indexed_result:
+        return [indexed_result], "complete"
     try:
         backlog = run_gbrain("get", "notes/memory-starmap-todo-list", timeout=EXACT_TODO_GBRAIN_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001

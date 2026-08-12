@@ -281,11 +281,51 @@ class ApiEndpointTests(unittest.TestCase):
             self.assertEqual(command, "get")
             return {"notes/memory-starmap-todo-list": root, "notes/memory-starmap-todo-list/completed-archive-0004": archive}[slug]
 
-        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
-            results, status = server.exact_todo_id_search_results("SG-0201")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_index = Path(tmpdir) / "missing-archive-index.json"
+            with mock.patch("server.COMPLETED_TODO_ARCHIVE_INDEX_PATH", missing_index), mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+                results, status = server.exact_todo_id_search_results("SG-0201")
         self.assertEqual(status, "complete")
         self.assertEqual(results[0]["slug"], "notes/memory-starmap-todo-list/include-persist-identity-metadata-in-sre-decision-bundles")
         self.assertIn("archived", results[0]["preview"].lower())
+
+    def test_exact_todo_id_search_uses_durable_completed_archive_index_first(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_index = Path(tmpdir) / "completed-todo-archive-index.json"
+            archive_index.write_text(json.dumps({
+                "schema": "memory-stargraph-completed-todo-archive-index-v1",
+                "archives": [{
+                    "slug": "notes/memory-starmap-todo-list/completed-archive-0004",
+                    "sequence": 4,
+                    "first_id": "SG-0151",
+                    "last_id": "SG-0201",
+                    "count": 2,
+                    "rows": [
+                        {
+                            "id": "SG-0151",
+                            "status": "completed",
+                            "priority": "P1",
+                            "title": "Earlier completed row",
+                            "slug": "notes/memory-starmap-todo-list/earlier-completed-row",
+                            "updated": "2026-08-01",
+                        },
+                        {
+                            "id": "SG-0201",
+                            "status": "completed",
+                            "priority": "P1",
+                            "title": "Include persist identity metadata in SRE decision bundles",
+                            "slug": "notes/memory-starmap-todo-list/include-persist-identity-metadata-in-sre-decision-bundles",
+                            "updated": "2026-08-11",
+                        },
+                    ],
+                }],
+            }))
+
+            with mock.patch("server.COMPLETED_TODO_ARCHIVE_INDEX_PATH", archive_index), mock.patch("server.run_gbrain") as run_gbrain:
+                results, status = server.exact_todo_id_search_results("SG-0201")
+        self.assertEqual(status, "complete")
+        self.assertEqual(results[0]["slug"], "notes/memory-starmap-todo-list/include-persist-identity-metadata-in-sre-decision-bundles")
+        run_gbrain.assert_not_called()
 
     def test_exact_todo_id_search_fails_closed_on_archive_mismatch(self):
         root = """# Memory Starmap TODO List
@@ -314,8 +354,10 @@ class ApiEndpointTests(unittest.TestCase):
             self.assertEqual(command, "get")
             return {"notes/memory-starmap-todo-list": root, "notes/memory-starmap-todo-list/completed-archive-0004": archive}[slug]
 
-        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
-            results, status = server.exact_todo_id_search_results("SG-0201")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_index = Path(tmpdir) / "missing-archive-index.json"
+            with mock.patch("server.COMPLETED_TODO_ARCHIVE_INDEX_PATH", missing_index), mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+                results, status = server.exact_todo_id_search_results("SG-0201")
         self.assertEqual(results, [])
         self.assertEqual(status, "partial_timeout")
 
