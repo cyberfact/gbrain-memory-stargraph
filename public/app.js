@@ -1477,7 +1477,7 @@ function todoSlugFromBacklogMarkdown(markdown, todoId) {
     .split(/\r?\n/)
     .find((line) => {
       const cells = line.split("|").map((cell) => cell.trim());
-      return cells.some((cell) => cell.toUpperCase() === normalizedTodoId);
+      return cells[1]?.toUpperCase() === normalizedTodoId;
     });
   const match = row?.match(/\[\[([^\]]+)\]\]/);
   return match?.[1] || "";
