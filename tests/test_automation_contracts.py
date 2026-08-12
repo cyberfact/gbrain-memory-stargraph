@@ -336,6 +336,20 @@ class AutomationContractTests(unittest.TestCase):
             for field in required_fields:
                 self.assertIn(field, prompt, f"{prompt_path} missing {field}")
 
+    def test_x_intelligence_run_records_authoritative_duration_boundaries(self):
+        prompt = (
+            ROOT / "automations/gbrain-x-intelligence-capture/prompt.md"
+        ).read_text()
+
+        for phrase in (
+            "started_at",
+            "completed_at",
+            "duration_seconds",
+            "classify duration as `unverified`",
+            "do not substitute a report date",
+        ):
+            self.assertIn(phrase, prompt)
+
     def test_recurring_bridge_contract_attests_runner_source_and_schema(self):
         runbook = (ROOT / "docs/automation-runbook.md").read_text()
         sre_prompt = (ROOT / "automations/memory-stargraph-sre/prompt.md").read_text()
