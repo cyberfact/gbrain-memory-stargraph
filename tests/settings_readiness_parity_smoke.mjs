@@ -132,7 +132,12 @@ try {
     );
   }, settledRequestId, { timeout: 60000 });
   const manualRequestId = await page.locator("#settingsEvidenceCards").getAttribute("data-request-id");
-  await page.click("#refreshButton");
+  const hasGlobalRefreshButton = await page.locator("#refreshButton").count();
+  if (hasGlobalRefreshButton) {
+    await page.click("#refreshButton");
+  } else {
+    await page.click('#settingsEvidenceCards button[aria-label="Refresh weekly outcomes and customer readiness"]');
+  }
   await page.waitForFunction((previousId) => {
     const panel = document.querySelector("#settingsFlyout");
     const cards = document.querySelector("#settingsEvidenceCards");
