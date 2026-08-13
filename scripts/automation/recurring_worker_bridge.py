@@ -43,6 +43,8 @@ ALLOWED_OPERATIONS = {
     "daily_learning_intake": {"evidence", "persist"},
     "sre_daily_reliability": {"evidence", "persist"},
 }
+ALLOWED_DECISION_TYPES = {"no_action", "learning_created", "todo_planned", "report_only"}
+SRE_MANUAL_NO_ACTION_DECISION_ALIASES = {"cli_version_notice_assessment"}
 ROLE_AUTOMATION = {
     "daily_learning_intake": "memory-stargraph-daily-learning-intake",
     "sre_daily_reliability": "memory-stargraph-sre-daily-reliability",
@@ -891,6 +893,33 @@ def load_bundle(root: Path, values: dict[str, str]) -> dict[str, object]:
     return payload
 
 
+def _is_compatible_manual_sre_no_action(payload: dict[str, object]) -> bool:
+    decision = str(payload.get("decision") or "")
+    terminal_status = str(payload.get("terminal_status") or "")
+    remediation = str(payload.get("remediation") or "").strip().lower()
+    return (
+        payload.get("assessment_type") == "manual_read_only_cli_notice"
+        and ("no_action" in decision or "no_action" in terminal_status)
+        and payload.get("incident") is False
+        and payload.get("todo_created_or_updated") is False
+        and remediation in {"no-op", "none", "no_action"}
+    )
+
+
+def normalize_persist_bundle_decision_type(payload: dict[str, object], *, role: str) -> dict[str, object]:
+    prepared = dict(payload)
+    decision_type = prepared.get("decision_type")
+    if role == "sre_daily_reliability" and decision_type in SRE_MANUAL_NO_ACTION_DECISION_ALIASES:
+        if not _is_compatible_manual_sre_no_action(prepared):
+            raise BridgeError("manual SRE decision_type alias requires compatible no_action evidence")
+        prepared["decision_type_normalized_from"] = decision_type
+        prepared["decision_type"] = "no_action"
+        return prepared
+    if decision_type not in ALLOWED_DECISION_TYPES:
+        raise BridgeError("unsupported decision_type")
+    return prepared
+
+
 def prepare_persist_bundle_identity(payload: dict[str, object], *, role: str, invocation_id: str, operation: str = "persist") -> dict[str, object]:
     if role not in ALLOWED_ROLES:
         raise BridgeError(f"unsupported role: {role}")
@@ -908,7 +937,7 @@ def prepare_persist_bundle_identity(payload: dict[str, object], *, role: str, in
         if existing is not None and existing != value:
             raise BridgeError(f"bundle {key} mismatch")
         prepared[key] = value
-    return prepared
+    return normalize_persist_bundle_decision_type(prepared, role=role)
 
 
 def validate_artifact(role: str, artifact: dict[str, object], seen_todos: set[str]) -> None:
@@ -948,7 +977,7 @@ def persist_decision(root: Path, values: dict[str, str]) -> dict[str, object]:
     if bundle.get("operation") != "persist":
         raise BridgePhaseError("decision_bundle_validation", "bundle operation must be persist")
     decision_type = bundle.get("decision_type")
-    if decision_type not in {"no_action", "learning_created", "todo_planned", "report_only"}:
+    if decision_type not in ALLOWED_DECISION_TYPES:
         raise BridgePhaseError("decision_bundle_validation", "unsupported decision_type")
     artifacts = bundle.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:

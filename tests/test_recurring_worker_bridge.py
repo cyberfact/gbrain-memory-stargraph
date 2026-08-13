@@ -127,6 +127,74 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertFalse((root / "bundles" / "sg0201-mismatch-decision.json").exists())
 
+    def test_write_bundle_normalizes_manual_cli_notice_to_no_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            invocation_id = "sre-cli-version-assessment-sg0204-0001"
+            bundle = {
+                "decision_type": "cli_version_notice_assessment",
+                "assessment_type": "manual_read_only_cli_notice",
+                "decision": "compatible_no_action_defer_to_authorized_maintenance_window",
+                "terminal_status": "completed_no_action_cli_update_notice_deferred",
+                "incident": False,
+                "remediation": "no-op",
+                "todo_created_or_updated": False,
+                "artifacts": [
+                    {
+                        "kind": "run",
+                        "slug": "runs/memory-stargraph-sre-sg0204-cli-version-assessment",
+                        "markdown": "---\nstatus: completed\n---\n# SG-0204 CLI Version Assessment\n",
+                    }
+                ],
+            }
+            with mock.patch("sys.stdin", io.StringIO(json.dumps(bundle))):
+                result = bridge.main([
+                    "--runtime-dir", str(root),
+                    "write-bundle",
+                    "--filename", f"{invocation_id}-decision.json",
+                    "--role", "sre_daily_reliability",
+                    "--invocation-id", invocation_id,
+                    "--json",
+                ])
+            self.assertEqual(result, 0)
+            written = json.loads((root / "bundles" / f"{invocation_id}-decision.json").read_text(encoding="utf-8"))
+            self.assertEqual(written["decision_type"], "no_action")
+            self.assertEqual(written["decision_type_normalized_from"], "cli_version_notice_assessment")
+            values = bridge.validate_request(self.make_request(
+                role="sre_daily_reliability",
+                operation="persist",
+                invocation_id=invocation_id,
+                bundle_file=str(root / "bundles" / f"{invocation_id}-decision.json"),
+            ))
+            with mock.patch.object(bridge, "gbrain_put"):
+                persisted = bridge.persist_decision(root, values)
+            self.assertEqual(persisted["decision_type"], "no_action")
+            self.assertEqual(persisted["artifact_count"], 1)
+
+    def test_write_bundle_rejects_unknown_sre_decision_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = {
+                "decision_type": "manual_custom_assessment",
+                "assessment_type": "manual_read_only_cli_notice",
+                "decision": "compatible_no_action",
+                "incident": False,
+                "remediation": "no-op",
+                "todo_created_or_updated": False,
+                "artifacts": [],
+            }
+            with mock.patch("sys.stdin", io.StringIO(json.dumps(bundle))):
+                result = bridge.main([
+                    "--runtime-dir", str(root),
+                    "write-bundle",
+                    "--filename", "sg0204-unknown-decision.json",
+                    "--role", "sre_daily_reliability",
+                    "--invocation-id", "sre-cli-version-assessment-sg0204-0002",
+                    "--json",
+                ])
+            self.assertEqual(result, 1)
+            self.assertFalse((root / "bundles" / "sg0204-unknown-decision.json").exists())
+
     def test_learning_evidence_bundle_has_required_slots_and_phase_heartbeat(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -283,6 +351,37 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             with mock.patch.object(bridge, "gbrain_put"):
                 old_result = bridge.persist_decision(root, values)
             self.assertNotIn("numeric_sre_evidence_summary", old_result)
+
+    def test_persist_rejects_raw_manual_cli_notice_alias_if_writer_bypassed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            bundle_path = root / "bundles" / "decision.json"
+            bundle = {
+                "role": "sre_daily_reliability",
+                "operation": "persist",
+                "invocation_id": "sre-cli-version-assessment-sg0204-0003",
+                "decision_type": "cli_version_notice_assessment",
+                "assessment_type": "manual_read_only_cli_notice",
+                "decision": "compatible_no_action",
+                "incident": False,
+                "remediation": "no-op",
+                "todo_created_or_updated": False,
+                "artifacts": [{
+                    "kind": "run",
+                    "slug": "runs/memory-stargraph-sre-sg0204-raw-alias",
+                    "markdown": "---\nstatus: completed\n---\n# SG-0204 Raw Alias\n",
+                }],
+            }
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            values = bridge.validate_request(self.make_request(
+                role="sre_daily_reliability",
+                operation="persist",
+                invocation_id="sre-cli-version-assessment-sg0204-0003",
+                bundle_file=str(bundle_path),
+            ))
+            with self.assertRaisesRegex(bridge.BridgePhaseError, "unsupported decision_type"):
+                bridge.persist_decision(root, values)
 
     def test_gbrain_put_falls_back_to_stargraph_save_and_raw_readback(self):
         calls = []
