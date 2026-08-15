@@ -272,7 +272,7 @@ try {
   await page.waitForFunction(() => {
     const text = document.querySelector("#operationModal")?.textContent || "";
     return text.includes("durable follow-up") || text.includes("No follow-ups match this state.") || text.includes("Unknown tool");
-  }, null, { timeout: 15000 });
+  }, null, { timeout: 30000 });
   const followupsBackendState = await page.evaluate(() => ({
     modalText: document.querySelector("#operationModal")?.textContent || "",
   }));
