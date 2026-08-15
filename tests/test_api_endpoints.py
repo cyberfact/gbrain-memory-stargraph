@@ -1584,6 +1584,68 @@ class ApiEndpointTests(unittest.TestCase):
             fake_store.calls,
         )
 
+    def test_autopilot_findings_falls_back_to_empty_supported_state_when_tool_missing(self):
+        store = server.GraphStore()
+        missing_tool = RuntimeError(
+            "GBrain backend does not expose autopilot_findings_list: Unknown tool: autopilot_findings_list"
+        )
+        with (
+            mock.patch("server.gbrain_call_tool", side_effect=missing_tool),
+            mock.patch("server.run_gbrain", return_value="No pages found.\n") as fake_gbrain,
+        ):
+            data = store.list_autopilot_findings({"limit": 10, "offset": 0})
+
+        self.assertEqual(data["findings"], [])
+        self.assertEqual(data["total"], 0)
+        self.assertEqual(data["backend_status"], "gbrain_tag_fallback")
+        self.assertNotIn("Unknown tool", json.dumps(data))
+        self.assertIn(mock.call("list", "--tag", "autopilot-finding", "-n", "20", timeout=8), fake_gbrain.mock_calls)
+
+    def test_autopilot_findings_tag_fallback_lists_bounded_pages(self):
+        store = server.GraphStore()
+        missing_tool = RuntimeError("Unknown tool: autopilot_findings_list")
+
+        def fake_gbrain(*args, **_kwargs):
+            if args[:3] == ("list", "--tag", "autopilot-finding"):
+                return "notes/autopilot/finding-one\tnote\t2026-08-15\tFinding One\n"
+            if args[:3] == ("list", "--tag", "follow-up"):
+                return "No pages found.\n"
+            if args == ("get", "notes/autopilot/finding-one"):
+                return (
+                    "---\n"
+                    "title: Finding One\n"
+                    "state: blocked\n"
+                    "severity: high\n"
+                    "rationale: Needs operator review.\n"
+                    "owner: sre\n"
+                    "repair_attempts: 1\n"
+                    "postcondition_failures: 2\n"
+                    "recommended_action: Review run evidence.\n"
+                    "---\n"
+                    "# Finding One\n"
+                )
+            raise AssertionError(args)
+
+        with (
+            mock.patch("server.gbrain_call_tool", side_effect=missing_tool),
+            mock.patch("server.run_gbrain", side_effect=fake_gbrain),
+        ):
+            data = store.list_autopilot_findings({"state": "blocked", "limit": 5, "offset": 0})
+
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["findings"][0]["slug"], "notes/autopilot/finding-one")
+        self.assertEqual(data["findings"][0]["state"], "blocked")
+        self.assertEqual(data["findings"][0]["severity"], "high")
+        self.assertEqual(data["findings"][0]["repair_attempts"], 1)
+        self.assertEqual(data["findings"][0]["postcondition_failures"], 2)
+        self.assertEqual(data["findings"][0]["backend_source"], "gbrain_tag_fallback")
+
+    def test_autopilot_findings_preserves_non_tool_backend_errors(self):
+        store = server.GraphStore()
+        with mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("network failed")):
+            with self.assertRaisesRegex(RuntimeError, "network failed"):
+                store.list_autopilot_findings({"limit": 10})
+
     def test_autopilot_finding_acknowledgement_does_not_claim_resolution(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):

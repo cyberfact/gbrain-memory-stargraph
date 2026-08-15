@@ -194,7 +194,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.194"
+UI_VERSION = "V1.0.195"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
@@ -1659,6 +1659,96 @@ def paginate_rows(rows, limit, offset):
         "total": total,
         "next_offset": next_offset,
         "previous_offset": previous_offset,
+    }
+
+
+AUTOPILOT_FINDING_STATES = {
+    "open",
+    "queued",
+    "repairing",
+    "blocked",
+    "awaiting_approval",
+    "escalated",
+    "resolved",
+}
+AUTOPILOT_FINDING_FALLBACK_TAGS = ("autopilot-finding", "follow-up")
+
+
+def normalize_autopilot_finding_from_page(row, markdown):
+    meta, body = parse_frontmatter(markdown or "")
+    slug = str(row.get("slug") or meta.get("slug") or "").strip()
+    if not slug:
+        return None
+    state = str(meta.get("state") or meta.get("status") or "open").strip().lower().replace(" ", "_")
+    if state not in AUTOPILOT_FINDING_STATES:
+        state = "open"
+    title = str(meta.get("title") or row.get("title") or make_label(slug)).strip()
+    rationale = str(meta.get("rationale") or meta.get("summary") or "").strip()
+    if not rationale:
+        for line in body.splitlines():
+            cleaned = re.sub(r"^#+\s*", "", line).strip()
+            if cleaned:
+                rationale = cleaned[:280]
+                break
+    stable_id = int(hashlib.sha256(slug.encode("utf-8")).hexdigest()[:8], 16)
+    finding_id = parse_nonnegative_int(meta.get("id"), stable_id)
+    return {
+        "id": finding_id,
+        "slug": slug,
+        "check_name": str(meta.get("check_name") or meta.get("finding") or title or "Autopilot follow-up").strip(),
+        "state": state,
+        "severity": str(meta.get("severity") or "info").strip(),
+        "rationale": rationale or "No rationale supplied.",
+        "source_id": str(meta.get("source_id") or row.get("type") or "gbrain-page").strip(),
+        "owner": str(meta.get("owner") or "").strip(),
+        "repair_attempts": parse_nonnegative_int(meta.get("repair_attempts"), 0),
+        "postcondition_failures": parse_nonnegative_int(meta.get("postcondition_failures"), 0),
+        "recommended_action": str(meta.get("recommended_action") or "").strip(),
+        "acknowledged_at": str(meta.get("acknowledged_at") or "").strip(),
+        "acknowledged_by": str(meta.get("acknowledged_by") or "").strip(),
+        "backend_source": "gbrain_tag_fallback",
+    }
+
+
+def list_autopilot_findings_from_gbrain_pages(payload):
+    limit = max(1, min(AUTOPILOT_FINDINGS_MAX_LIMIT, int(payload.get("limit") or 50)))
+    offset = max(0, int(payload.get("offset") or 0))
+    state_filter = str(payload.get("state") or "").strip().lower()
+    page_read_budget = max(limit + offset, 20)
+    page_read_budget = min(AUTOPILOT_FINDINGS_MAX_LIMIT, page_read_budget)
+    rows_by_slug = {}
+    checked_tags = []
+    for tag in AUTOPILOT_FINDING_FALLBACK_TAGS:
+        try:
+            output = run_gbrain("list", "--tag", tag, "-n", str(page_read_budget), timeout=8)
+        except Exception:  # noqa: BLE001
+            continue
+        checked_tags.append(tag)
+        for row in parse_page_list(output):
+            slug = str(row.get("slug") or "")
+            if slug and slug not in rows_by_slug:
+                rows_by_slug[slug] = row
+    findings = []
+    for row in rows_by_slug.values():
+        try:
+            markdown = run_gbrain("get", row["slug"], timeout=8)
+        except Exception:  # noqa: BLE001
+            continue
+        finding = normalize_autopilot_finding_from_page(row, markdown)
+        if not finding:
+            continue
+        if state_filter and finding["state"] != state_filter:
+            continue
+        findings.append(finding)
+    findings.sort(key=lambda item: (item.get("state") == "resolved", item.get("severity") == "info", item.get("check_name") or ""))
+    page = findings[offset:offset + limit]
+    return {
+        "findings": page,
+        "total": len(findings),
+        "backend_status": "gbrain_tag_fallback",
+        "backend_message": "Autopilot findings tool unavailable; using supported GBrain tag fallback.",
+        "checked_tags": checked_tags,
+        "filters": payload,
     }
 
 
@@ -5837,7 +5927,16 @@ class GraphStore:
         payload["offset"] = max(0, int(payload.get("offset") or 0))
         if not payload.get("state"):
             payload.pop("state", None)
-        result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
+        try:
+            result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
+        except RuntimeError as exc:
+            message = str(exc)
+            if (
+                "GBrain backend does not expose autopilot_findings_list" not in message
+                and "Unknown tool: autopilot_findings_list" not in message
+            ):
+                raise
+            result = list_autopilot_findings_from_gbrain_pages(payload)
         if not isinstance(result, dict):
             return {"findings": [], "total": 0}
         findings = result.get("findings")

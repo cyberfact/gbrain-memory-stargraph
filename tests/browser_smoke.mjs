@@ -269,6 +269,19 @@ try {
   if (!followupsKeyboardOpen.active || followupsKeyboardOpen.expanded !== "true" || followupsKeyboardOpen.modalTitle !== "Autopilot Follow-ups") {
     throw new Error(`Expected keyboard-opened Follow-ups modal with active sidebar state: ${JSON.stringify(followupsKeyboardOpen)}`);
   }
+  await page.waitForFunction(() => {
+    const text = document.querySelector("#operationModal")?.textContent || "";
+    return text.includes("durable follow-up") || text.includes("No follow-ups match this state.") || text.includes("Unknown tool");
+  }, null, { timeout: 15000 });
+  const followupsBackendState = await page.evaluate(() => ({
+    modalText: document.querySelector("#operationModal")?.textContent || "",
+  }));
+  if (/Unknown tool|autopilot_findings_list/.test(followupsBackendState.modalText)) {
+    throw new Error(`Expected Follow-ups to render supported backend state without leaking tool errors: ${JSON.stringify(followupsBackendState)}`);
+  }
+  if (!/durable follow-up|No follow-ups match this state\./.test(followupsBackendState.modalText)) {
+    throw new Error(`Expected Follow-ups to render a durable list or clear empty state: ${JSON.stringify(followupsBackendState)}`);
+  }
   await page.click("#modalCloseButton");
   await page.waitForFunction(() => document.querySelector("#operationModal")?.hidden, null, { timeout: 5000 });
   if (initial.metricsColumns !== 1) {
