@@ -2720,6 +2720,102 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(apply_payload["validation"]["check_resolvable"], "passed")
         self.assertEqual(apply_payload["validation"]["routing_tests"], "passed")
 
+    def test_resolver_health_uses_local_read_only_fallback_when_tool_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            (data_dir / "resolver_proposals.json").write_text("[]", encoding="utf-8")
+            (data_dir / "resolver_dispatch_events.json").write_text(
+                json.dumps([
+                    {"created_at": "2026-08-16T09:00:00Z", "result_status": "success"},
+                    {"created_at": "2026-08-16T09:05:00Z", "result_status": "timeout"},
+                ]),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch("server.RESOLVER_PROPOSALS_PATH", data_dir / "resolver_proposals.json"),
+                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
+                mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("Unknown tool: resolver_feedback_health")),
+            ):
+                status, data = self.dispatch_get("/api/resolver/health")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["fallback_used"])
+        self.assertTrue(data["read_only"])
+        self.assertEqual(data["source"], "local_resolver_ledger_fallback")
+        self.assertEqual(data["pending"], 0)
+        self.assertEqual(data["proposal_counts"]["pending"], 0)
+        self.assertEqual(data["event_counts"]["success"], 1)
+        self.assertEqual(data["event_counts"]["timeout"], 1)
+        self.assertFalse(data["auto_approval"])
+        serialized = json.dumps(data)
+        self.assertNotIn("resolver_feedback_health", serialized)
+        self.assertNotIn("Unknown tool", serialized)
+
+    def test_resolver_health_fallback_reports_pending_without_mutating(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            (data_dir / "resolver_proposals.json").write_text(
+                json.dumps([
+                    {"id": "rp-1", "status": "pending"},
+                    {"id": "rp-2", "status": "accepted"},
+                ]),
+                encoding="utf-8",
+            )
+            (data_dir / "resolver_dispatch_events.json").write_text("[]", encoding="utf-8")
+            with (
+                mock.patch("server.RESOLVER_PROPOSALS_PATH", data_dir / "resolver_proposals.json"),
+                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
+                mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("GBrain backend does not expose resolver_feedback_health: Unknown tool: resolver_feedback_health")),
+            ):
+                status, data = self.dispatch_get("/api/resolver/health")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["status"], "degraded")
+        self.assertEqual(data["pending"], 1)
+        self.assertEqual(data["proposal_counts"]["accepted"], 1)
+        self.assertFalse(data["auto_approval"])
+
+    def test_customer_readiness_uses_resolver_fallback_as_ready_when_none_pending(self):
+        fake_store = FakeStore()
+        weekly = {
+            "verified_memory_outcomes": {
+                "status": "pass",
+                "freshness": {"status": "current"},
+                "summary_counts": {"gates_passed": 9, "gates_total": 9},
+                "sre_numeric_evidence": {"status": "pass", "freshness": "current", "evidence_slugs": ["reports/sre"]},
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            (data_dir / "resolver_proposals.json").write_text("[]", encoding="utf-8")
+            (data_dir / "resolver_dispatch_events.json").write_text("[]", encoding="utf-8")
+            with (
+                mock.patch("server.STORE", fake_store),
+                mock.patch("server.RESOLVER_PROPOSALS_PATH", data_dir / "resolver_proposals.json"),
+                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
+                mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("Unknown tool: resolver_feedback_health")),
+                mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
+                mock.patch("server.attachment_storage_status", return_value={"available": True}),
+                mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
+                mock.patch("server.memory_value_digest", return_value=weekly),
+                mock.patch(
+                    "server.configured_target_readiness",
+                    return_value=("ready", {"configured_target_count": 1}, "Configured target evidence is available."),
+                ),
+            ):
+                status, data = self.dispatch_get("/api/customer-readiness")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["status"], "ready")
+        self.assertEqual(data["summary_counts"]["ready"], 8)
+        resolver_check = {check["id"]: check for check in data["checks"]}["resolver_pending"]
+        self.assertEqual(resolver_check["status"], "ready")
+        self.assertEqual(resolver_check["freshness"], "current")
+        serialized = json.dumps(data)
+        self.assertNotIn("resolver_feedback_health", serialized)
+        self.assertNotIn("Unknown tool", serialized)
+
     def test_resolver_dream_phase_generates_summary_without_apply(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)

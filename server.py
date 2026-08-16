@@ -194,7 +194,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.195"
+UI_VERSION = "V1.0.196"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
@@ -937,6 +937,90 @@ def resolver_proposals():
     return rows if isinstance(rows, list) else []
 
 
+def resolver_proposal_counts_from_rows(rows):
+    counts = {"pending": 0, "accepted": 0, "rejected": 0, "deferred": 0}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "pending").strip().lower()
+        if status not in counts:
+            counts[status] = 0
+        counts[status] += 1
+    return counts
+
+
+def parse_iso_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def resolver_events_24h_count(rows):
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    count = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        created = parse_iso_timestamp(row.get("created_at") or row.get("timestamp") or row.get("updated_at"))
+        if created is not None and created >= cutoff:
+            count += 1
+    return count
+
+
+def resolver_feedback_health_from_local_ledger(reason=""):
+    proposals = resolver_proposals()
+    events = resolver_events(MAX_RESOLVER_EVENTS)
+    proposal_counts = resolver_proposal_counts_from_rows(proposals)
+    statuses = [
+        normalize_resolver_status(row.get("result_status"), bool(row.get("fallback_used")))
+        for row in events
+        if isinstance(row, dict)
+    ]
+    latest_timestamps = [
+        parse_iso_timestamp(row.get("created_at") or row.get("timestamp") or row.get("updated_at"))
+        for row in [*proposals[:20], *events[:20]]
+        if isinstance(row, dict)
+    ]
+    latest_timestamps = [item for item in latest_timestamps if item is not None]
+    latest = max(latest_timestamps).isoformat().replace("+00:00", "Z") if latest_timestamps else ""
+    sanitized_reason = sanitize_text_summary(reason, 240)
+    if "resolver_feedback_health" in sanitized_reason or "Unknown tool" in sanitized_reason:
+        sanitized_reason = "Authoritative resolver health tool is unavailable."
+    return {
+        "source": "local_resolver_ledger_fallback",
+        "status": "ready" if proposal_counts.get("pending", 0) == 0 else "degraded",
+        "read_only": True,
+        "fallback_used": True,
+        "fallback_reason": sanitized_reason or "Authoritative resolver health tool is unavailable.",
+        "pending": proposal_counts.get("pending", 0),
+        "proposal_counts": proposal_counts,
+        "events_24h": resolver_events_24h_count(events),
+        "event_counts": {
+            "total": len(events),
+            "success": statuses.count("success"),
+            "fallback": statuses.count("fallback"),
+            "timeout": statuses.count("timeout"),
+            "no_match": statuses.count("no_match"),
+            "error": statuses.count("error"),
+        },
+        "scheduled_loop": "not_mutated",
+        "auto_approval": False,
+        "evidence_slugs": ["/api/resolver/proposals", "/api/resolver/events"],
+        "evidence_source": "local-durable-resolver-ledger",
+        "latest_evidence_at": latest,
+        "privacy": "Aggregate resolver counts only; proposal bodies, prompts, private paths, and backend tool names are withheld.",
+    }
+
+
 def write_resolver_proposals(rows):
     write_json_file(RESOLVER_PROPOSALS_PATH, rows[:MAX_RESOLVER_PROPOSALS])
 
@@ -1584,7 +1668,16 @@ def resolver_measure_impact(proposal_id, payload=None):
 
 
 def resolver_feedback_health():
-    return gbrain_call_tool("resolver_feedback_health", {}, timeout=20)
+    try:
+        return gbrain_call_tool("resolver_feedback_health", {}, timeout=20)
+    except RuntimeError as exc:
+        message = str(exc)
+        if (
+            "GBrain backend does not expose resolver_feedback_health" not in message
+            and "Unknown tool: resolver_feedback_health" not in message
+        ):
+            raise
+        return resolver_feedback_health_from_local_ledger(message)
 
 
 def clamp_take_review_limit(value):
