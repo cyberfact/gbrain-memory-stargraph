@@ -2031,6 +2031,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(status, 200)
         outcomes = digest["verified_memory_outcomes"]
         self.assertEqual(outcomes["sre_numeric_evidence"]["status"], "critical")
+        self.assertEqual(outcomes["sre_numeric_evidence"]["freshness"], "critical")
         self.assertEqual(outcomes["summary_counts"]["gates_degraded"], 1)
         gates = {gate["key"]: gate for gate in outcomes["gates"]}
         self.assertEqual(gates["sre_capacity_backup_restore"]["status"], "critical")

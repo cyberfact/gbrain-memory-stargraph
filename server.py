@@ -6434,6 +6434,11 @@ def customer_readiness():
         pass
     else:
         sre_numeric_status = "degraded"
+    sre_numeric_summary = (
+        str((sre_numeric or {}).get("summary") or "").strip()
+        if isinstance(sre_numeric, dict)
+        else ""
+    )
 
     checks = [
         readiness_check(
@@ -6494,7 +6499,7 @@ def customer_readiness():
             "sre_numeric_evidence",
             "SRE numeric evidence",
             sre_numeric_status,
-            "Numeric capacity, backup, restore, and baseline evidence is current." if sre_numeric_status == "ready" else "Numeric SRE capacity, backup, restore, or baseline evidence is missing, partial, or stale.",
+            "Numeric capacity, backup, restore, and baseline evidence is current." if sre_numeric_status == "ready" else (sre_numeric_summary or "Numeric SRE capacity, backup, restore, or baseline evidence is missing, partial, stale, warning, or critical."),
             (sre_numeric.get("evidence_slugs") if isinstance(sre_numeric, dict) else []) or ["reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d"],
             freshness=(sre_numeric.get("freshness") if isinstance(sre_numeric, dict) else None) or ("missing" if sre_numeric_error else "partial"),
             next_step="Open the latest SRE evidence report and inspect missing numeric capacity, backup, or restore fields.",
@@ -7149,8 +7154,10 @@ def verified_memory_outcomes(window, backlog, resolver_health):
         "gates": gates,
         "sre_numeric_evidence": {
             "status": sre_numeric["status"],
+            "freshness": sre_numeric["freshness"],
             "evidence_slugs": [item["slug"] for item in sre_numeric["evidence"] if item.get("available")],
             "counts": sre_numeric["counts"],
+            "summary": sre_numeric["summary"],
         },
         "deployment_attestation": {
             "status": deployment_attestation["status"],
