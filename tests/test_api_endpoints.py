@@ -1918,6 +1918,148 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertFalse(gates["retrieval_quality_benchmark"]["passed"])
         self.assertEqual(gates["retrieval_quality_benchmark"]["evidence_slugs"], [])
 
+    def test_latest_sre_numeric_evidence_passes_with_current_backup_and_daily_weekly_evidence(self):
+        class FixedDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = dt.datetime(2026, 8, 17, 10, 0, tzinfo=dt.timezone.utc)
+                return value if tz is None else value.astimezone(tz)
+
+        def fake_evidence(slug, *_args, **_kwargs):
+            if slug == "_backups/backup-latest":
+                return "# Backup\n\n- Run timestamp UTC: 2026-08-17T09:00:00Z\n"
+            return (
+                "memory-stargraph-sre-numeric-evidence-v1 cpu memory disk open-file "
+                "backup freshness restore rehearsal checksum 7-day 30-day "
+                "daily observed_at 2026-08-17T09:30:00Z weekly observed_at 2026-08-17T08:30:00Z"
+            )
+
+        with (
+            mock.patch("server.safe_gbrain_get_text_bounded", side_effect=fake_evidence),
+            mock.patch("server.datetime", FixedDateTime),
+        ):
+            result = server.latest_sre_numeric_evidence()
+
+        self.assertEqual(result["status"], "pass")
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["backup_freshness"]["status"], "current")
+        self.assertEqual(result["counts"]["daily_evidence_current"], 1)
+        self.assertEqual(result["counts"]["weekly_evidence_current"], 1)
+
+    def test_latest_sre_numeric_evidence_reports_warning_and_critical_backup_freshness(self):
+        class FixedDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = dt.datetime(2026, 8, 17, 10, 0, tzinfo=dt.timezone.utc)
+                return value if tz is None else value.astimezone(tz)
+
+        base = (
+            "memory-stargraph-sre-numeric-evidence-v1 cpu memory disk open-file "
+            "backup freshness restore rehearsal checksum 7-day 30-day "
+            "daily observed_at 2026-08-17T09:30:00Z weekly observed_at 2026-08-17T08:30:00Z"
+        )
+
+        def run_with_backup(backup_at):
+            def fake_evidence(slug, *_args, **_kwargs):
+                if slug == "_backups/backup-latest":
+                    return f"# Backup\n\n- Run timestamp UTC: {backup_at}\n"
+                return base
+            with (
+                mock.patch("server.safe_gbrain_get_text_bounded", side_effect=fake_evidence),
+                mock.patch("server.datetime", FixedDateTime),
+            ):
+                return server.latest_sre_numeric_evidence()
+
+        warning = run_with_backup("2026-08-15T18:00:00Z")
+        critical = run_with_backup("2026-08-12T10:00:01Z")
+
+        self.assertEqual(warning["status"], "warning")
+        self.assertFalse(warning["passed"])
+        self.assertEqual(warning["counts"]["backup_freshness_warning"], 1)
+        self.assertEqual(critical["status"], "critical")
+        self.assertFalse(critical["passed"])
+        self.assertEqual(critical["counts"]["backup_freshness_critical"], 1)
+
+    def test_latest_sre_numeric_evidence_requires_current_daily_evidence_for_recovery(self):
+        class FixedDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = dt.datetime(2026, 8, 17, 10, 0, tzinfo=dt.timezone.utc)
+                return value if tz is None else value.astimezone(tz)
+
+        def fake_evidence(slug, *_args, **_kwargs):
+            if slug == "_backups/backup-latest":
+                return "# Backup\n\n- Run timestamp UTC: 2026-08-17T09:00:00Z\n"
+            return (
+                "memory-stargraph-sre-numeric-evidence-v1 cpu memory disk open-file "
+                "backup freshness restore rehearsal checksum 7-day 30-day "
+                "weekly observed_at 2026-08-17T08:30:00Z"
+            )
+
+        with (
+            mock.patch("server.safe_gbrain_get_text_bounded", side_effect=fake_evidence),
+            mock.patch("server.datetime", FixedDateTime),
+        ):
+            result = server.latest_sre_numeric_evidence()
+
+        self.assertEqual(result["status"], "missing")
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["daily_evidence"]["status"], "missing")
+        self.assertEqual(result["counts"]["daily_evidence_current"], 0)
+
+    def test_weekly_digest_and_customer_readiness_surface_critical_sre_evidence(self):
+        fake_store = FakeStore()
+        critical_sre = {
+            "status": "critical",
+            "passed": False,
+            "freshness": "critical",
+            "evidence": [{"slug": "_backups/backup-latest", "available": True, "status": "available"}],
+            "evidence_slugs": ["_backups/backup-latest"],
+            "counts": {"backup_freshness_critical": 1},
+            "summary": "Latest backup evidence is older than the critical freshness threshold.",
+        }
+
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.safe_gbrain_get_text_bounded", return_value="unavailable: redacted"),
+            mock.patch("server.resolver_feedback_health", return_value={"pending": 0}),
+            mock.patch("server.latest_sre_numeric_evidence", return_value=critical_sre),
+            mock.patch("server.read_deployment_attestation", return_value=ready_deployment_attestation()),
+        ):
+            status, digest = self.dispatch_get("/api/memory-value-digest?window=week")
+
+        self.assertEqual(status, 200)
+        outcomes = digest["verified_memory_outcomes"]
+        self.assertEqual(outcomes["sre_numeric_evidence"]["status"], "critical")
+        self.assertEqual(outcomes["summary_counts"]["gates_degraded"], 1)
+        gates = {gate["key"]: gate for gate in outcomes["gates"]}
+        self.assertEqual(gates["sre_capacity_backup_restore"]["status"], "critical")
+
+        weekly = {
+            "verified_memory_outcomes": {
+                "status": "degraded",
+                "freshness": {"status": "critical"},
+                "summary_counts": {"gates_passed": 8, "gates_total": 9},
+                "sre_numeric_evidence": critical_sre,
+            }
+        }
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
+            mock.patch("server.attachment_storage_status", return_value={"available": True}),
+            mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
+            mock.patch("server.memory_value_digest", return_value=weekly),
+            mock.patch("server.resolver_feedback_health", return_value={"pending": 0, "proposal_counts": {"pending": 0}}),
+            mock.patch("server.configured_target_readiness", return_value=("ready", {"evidence_slugs": []}, "Configured target evidence is available.")),
+        ):
+            status, readiness = self.dispatch_get("/api/customer-readiness")
+
+        self.assertEqual(status, 200)
+        checks = {check["id"]: check for check in readiness["checks"]}
+        self.assertEqual(readiness["status"], "degraded")
+        self.assertEqual(checks["sre_numeric_evidence"]["status"], "critical")
+        self.assertEqual(checks["sre_numeric_evidence"]["freshness"], "critical")
+
     def test_weekly_memory_value_digest_keeps_broken_supersession_degraded(self):
         fake_store = FakeStore()
         base_evidence = {

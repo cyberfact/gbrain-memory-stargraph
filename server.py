@@ -194,8 +194,12 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.196"
+UI_VERSION = "V1.0.197"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
+SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
+SRE_DAILY_EVIDENCE_MAX_AGE_SECONDS = 36 * 60 * 60
+SRE_WEEKLY_EVIDENCE_MAX_AGE_SECONDS = 10 * 24 * 60 * 60
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -6426,7 +6430,7 @@ def customer_readiness():
     sre_numeric_status = str((sre_numeric or {}).get("status") or "missing")
     if sre_numeric_status == "pass":
         sre_numeric_status = "ready"
-    elif sre_numeric_status in {"partial", "missing", "stale"}:
+    elif sre_numeric_status in {"partial", "missing", "stale", "warning", "critical"}:
         pass
     else:
         sre_numeric_status = "degraded"
@@ -6506,7 +6510,7 @@ def customer_readiness():
         ),
     ]
     blocked = [check for check in checks if check["status"] in {"blocked", "missing"}]
-    degraded = [check for check in checks if check["status"] in {"degraded", "partial", "stale", "source_mismatch", "no_activity"}]
+    degraded = [check for check in checks if check["status"] in {"degraded", "partial", "stale", "warning", "critical", "source_mismatch", "no_activity"}]
     overall_status = "blocked" if blocked else ("degraded" if degraded else "ready")
     if blocked or degraded:
         first_attention = (blocked or degraded)[0]
@@ -6545,6 +6549,8 @@ def customer_readiness():
             "missing": sum(1 for check in checks if check["status"] == "missing"),
             "partial": sum(1 for check in checks if check["status"] == "partial"),
             "stale": sum(1 for check in checks if check["status"] == "stale"),
+            "warning": sum(1 for check in checks if check["status"] == "warning"),
+            "critical": sum(1 for check in checks if check["status"] == "critical"),
             "source_mismatch": sum(1 for check in checks if check["status"] == "source_mismatch"),
             "no_activity": sum(1 for check in checks if check["status"] == "no_activity"),
         },
@@ -6795,15 +6801,97 @@ def outcome_gate(key, label, status, evidence, *, passed=False, counts=None, sum
     }
 
 
+def extract_evidence_timestamps(text):
+    timestamps = []
+    seen = set()
+    patterns = [
+        r"\b20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b",
+        r"\b20\d{2}-\d{2}-\d{2}\b",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, str(text or "")):
+            raw = match.group(0)
+            if raw in seen:
+                continue
+            seen.add(raw)
+            parsed = parse_iso_timestamp(raw)
+            if parsed is None and re.fullmatch(r"20\d{2}-\d{2}-\d{2}", raw):
+                parsed = parse_iso_timestamp(f"{raw}T00:00:00Z")
+            if parsed:
+                timestamps.append(parsed)
+    return timestamps
+
+
+def backup_latest_freshness(markdown, observed_at=None):
+    observed = observed_at or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    observed = observed.astimezone(timezone.utc)
+    timestamps = extract_evidence_timestamps(markdown)
+    latest = max(timestamps) if timestamps else None
+    if latest is None:
+        return {
+            "status": "missing",
+            "latest_backup_at": "",
+            "age_seconds": None,
+            "freshness": "missing",
+            "summary": "Backup latest evidence is missing or has no parseable backup timestamp.",
+        }
+    age_seconds = max(0, int((observed - latest.astimezone(timezone.utc)).total_seconds()))
+    if age_seconds > SRE_BACKUP_CRITICAL_SECONDS:
+        status = "critical"
+        summary = "Latest backup evidence is older than the critical freshness threshold."
+    elif age_seconds > SRE_BACKUP_WARNING_SECONDS:
+        status = "warning"
+        summary = "Latest backup evidence is older than the warning freshness threshold."
+    else:
+        status = "current"
+        summary = "Latest backup evidence is within the current freshness threshold."
+    return {
+        "status": status,
+        "latest_backup_at": latest.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "age_seconds": age_seconds,
+        "freshness": status,
+        "summary": summary,
+    }
+
+
+def evidence_recency_status(texts_by_slug, marker, max_age_seconds, observed_at=None):
+    observed = observed_at or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    observed = observed.astimezone(timezone.utc)
+    marker = marker.lower()
+    candidates = []
+    for slug, text in texts_by_slug.items():
+        if slug == "_backups/backup-latest":
+            continue
+        lowered = f"{slug}\n{text}".lower()
+        if marker not in lowered:
+            continue
+        candidates.extend(extract_evidence_timestamps(f"{slug}\n{text}"))
+    latest = max(candidates) if candidates else None
+    if latest is None:
+        return {"status": "missing", "latest_at": "", "age_seconds": None}
+    age_seconds = max(0, int((observed - latest.astimezone(timezone.utc)).total_seconds()))
+    return {
+        "status": "current" if age_seconds <= max_age_seconds else "stale",
+        "latest_at": latest.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "age_seconds": age_seconds,
+    }
+
+
 def latest_sre_numeric_evidence():
     evidence_slugs = [
         "runs/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
         "reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
         "runs/memory-stargraph-sre-weekly-resilience-20260809t143652-0700-85",
         "reports/memory-stargraph-sre-weekly-resilience-2026-08-09-143652-85",
+        "_backups/backup-latest",
     ]
     evidence = []
     texts = []
+    texts_by_slug = {}
     with ThreadPoolExecutor(max_workers=len(evidence_slugs)) as executor:
         futures = {slug: executor.submit(safe_gbrain_get_text_bounded, slug, 3, local_first=True) for slug in evidence_slugs}
         for slug, future in futures.items():
@@ -6815,32 +6903,76 @@ def latest_sre_numeric_evidence():
             evidence.append(item)
             if item["available"]:
                 texts.append(str(text).lower())
+                texts_by_slug[slug] = str(text)
     joined = "\n".join(texts)
     has_schema = "memory-stargraph-sre-numeric-evidence-v1" in joined
     has_capacity = all(term in joined for term in ("cpu", "memory", "disk", "open-file")) or all(term in joined for term in ("cpu", "memory", "disk", "open_file"))
-    has_backup = "backup" in joined and ("freshness" in joined or "backup current" in joined)
+    backup_text = texts_by_slug.get("_backups/backup-latest", "")
+    backup_freshness = backup_latest_freshness(backup_text)
+    has_backup = backup_freshness["status"] == "current"
     has_restore = "restore" in joined and ("checksum" in joined or "rehearsal" in joined)
     has_baseline = "7-day" in joined and "30-day" in joined
-    passed = has_schema and has_capacity and has_backup and has_restore and has_baseline
+    daily_recency = evidence_recency_status(texts_by_slug, "daily", SRE_DAILY_EVIDENCE_MAX_AGE_SECONDS)
+    weekly_recency = evidence_recency_status(texts_by_slug, "weekly", SRE_WEEKLY_EVIDENCE_MAX_AGE_SECONDS)
+    has_current_daily = daily_recency["status"] == "current"
+    has_current_weekly = weekly_recency["status"] == "current"
+    passed = has_schema and has_capacity and has_backup and has_restore and has_baseline and has_current_daily and has_current_weekly
     missing = not any(item["available"] for item in evidence)
-    status = "pass" if passed else ("missing" if missing else "partial")
+    if passed:
+        status = "pass"
+    elif missing:
+        status = "missing"
+    elif backup_freshness["status"] == "critical":
+        status = "critical"
+    elif backup_freshness["status"] == "warning":
+        status = "warning"
+    elif backup_freshness["status"] == "missing":
+        status = "missing"
+    elif daily_recency["status"] == "missing":
+        status = "missing"
+    elif daily_recency["status"] == "stale" or weekly_recency["status"] == "stale":
+        status = "stale"
+    elif weekly_recency["status"] == "missing":
+        status = "missing"
+    else:
+        status = "partial"
+    freshness = "current" if status == "pass" else status
+    if status == "pass":
+        summary = "Numeric SRE capacity, backup freshness, restore rehearsal, current Daily evidence, current Weekly evidence, and 7-day/30-day baselines are present."
+    elif status in {"critical", "warning"}:
+        summary = backup_freshness["summary"]
+    elif status == "stale":
+        summary = "Numeric SRE evidence is stale because current Daily or Weekly evidence is outside the allowed recency window."
+    elif status == "missing":
+        summary = "Numeric SRE evidence is missing required backup freshness or current Daily/Weekly evidence."
+    else:
+        summary = "Numeric SRE capacity, backup, restore, baseline, or recency evidence is partial."
     return {
         "status": status,
         "passed": passed,
-        "freshness": "current" if passed else ("missing" if missing else "partial"),
+        "freshness": freshness,
         "evidence": evidence,
+        "evidence_slugs": [item["slug"] for item in evidence if item.get("available")],
         "counts": {
             "numeric_schema_present": 1 if has_schema else 0,
             "capacity_categories_present": 1 if has_capacity else 0,
-            "backup_evidence_present": 1 if has_backup else 0,
+            "backup_evidence_present": 1 if backup_freshness["status"] != "missing" else 0,
+            "backup_freshness_current": 1 if backup_freshness["status"] == "current" else 0,
+            "backup_freshness_warning": 1 if backup_freshness["status"] == "warning" else 0,
+            "backup_freshness_critical": 1 if backup_freshness["status"] == "critical" else 0,
+            "backup_freshness_missing": 1 if backup_freshness["status"] == "missing" else 0,
+            "backup_freshness_age_seconds": backup_freshness["age_seconds"],
+            "backup_warning_threshold_seconds": SRE_BACKUP_WARNING_SECONDS,
+            "backup_critical_threshold_seconds": SRE_BACKUP_CRITICAL_SECONDS,
             "restore_evidence_present": 1 if has_restore else 0,
             "baseline_windows_present": 1 if has_baseline else 0,
+            "daily_evidence_current": 1 if has_current_daily else 0,
+            "weekly_evidence_current": 1 if has_current_weekly else 0,
         },
-        "summary": (
-            "Numeric SRE capacity, backup freshness, restore rehearsal, and 7-day/30-day baseline evidence is present."
-            if passed
-            else "Numeric SRE capacity, backup, restore, or baseline evidence is missing or partial."
-        ),
+        "backup_freshness": backup_freshness,
+        "daily_evidence": daily_recency,
+        "weekly_evidence": weekly_recency,
+        "summary": summary,
     }
 
 
@@ -6992,7 +7124,7 @@ def verified_memory_outcomes(window, backlog, resolver_health):
     ]
     passed = sum(1 for gate in gates if gate["passed"])
     missing = sum(1 for gate in gates if gate["status"] == "missing")
-    degraded = sum(1 for gate in gates if gate["status"] in {"degraded", "stale", "source_mismatch"})
+    degraded = sum(1 for gate in gates if gate["status"] in {"degraded", "stale", "warning", "critical", "source_mismatch"})
     aggregate_status = "pass" if passed == len(gates) else ("partial" if missing else ("degraded" if degraded else "partial"))
     return {
         "schema_version": 1,
